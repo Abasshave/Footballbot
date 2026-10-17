@@ -3,7 +3,6 @@ from datetime import datetime, date
 
 # Fake web server for Render free
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -63,7 +62,6 @@ def wat(iso):
     except:
         return ""
 
-# Real tables - updated Oct 2026
 REAL = {
     "eng.1": "🏆 *PREMIER LEAGUE 26/27*\n\n🥇 *Man City* - 18 pts (6-0-0) GD +11\n🥈 *Arsenal* - 15 pts (5-0-1) GD +5\n🥉 *Brighton* - 13 pts (4-1-1) GD +13\n4. Brentford - 10 pts\n5. Everton - 10 pts\n6. Chelsea - 10 pts\n7. Leeds - 9 pts\n8. Hull City - 9 pts",
     "esp.1": "🏆 *LA LIGA 26/27*\n\n🥇 *Barcelona* - 24 pts (8-0-0) GD +27 🔥\n🥈 *Atletico Madrid* - 19 pts\n🥉 *Real Betis* - 19 pts\n4. Real Madrid - 18 pts\n5. Sevilla - 14 pts",
@@ -90,18 +88,15 @@ def get_today():
     games = []
     for lid in ["eng.1","esp.1","ita.1","ger.1","tur.1","uefa.champions","fra.1"]:
         try:
-            # Try with date filter
             url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today_str}"
             with urllib.request.urlopen(url, timeout=10) as r:
                 d = json.loads(r.read().decode())
             events = d.get("events", [])
-            # If no events today, try without filter for next games
             if not events:
                 url2 = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard"
                 with urllib.request.urlopen(url2, timeout=10) as r2:
                     d2 = json.loads(r2.read().decode())
                 events = d2.get("events", [])[:3]
-
             for ev in events[:5]:
                 comp = ev.get("competitions", [{}])[0]
                 teams = comp.get("competitors", [])
@@ -111,16 +106,13 @@ def get_today():
                 state = ev.get("status",{}).get("type",{}).get("state","")
                 detail = ev.get("status",{}).get("type",{}).get("detail","")
                 t = wat(ev.get("date",""))
-                
                 if state == "in":
                     games.append(f"🔴 *{h['team']['displayName']} {h.get('score','0')}-{a.get('score','0')} {a['team']['displayName']}* | {detail}")
                 elif state == "post":
                     games.append(f"✅ {h['team']['displayName']} {h.get('score','0')}-{a.get('score','0')} {a['team']['displayName']} | FT - {t}")
                 else:
                     games.append(f"⚽ {h['team']['displayName']} vs {a['team']['displayName']} - 🕒 {t} | {detail if detail else lid}")
-        except Exception as e:
-            print(f"today {lid} err {e}")
-            continue
+        except: continue
     return games[:20]
 
 def get_live():
@@ -164,7 +156,6 @@ def search_team(q):
         except: continue
     return found[:8]
 
-# --- AUTO NOTIFIER ---
 def notifier():
     print("🔔 Auto goal notifier ON (30s)")
     while True:
@@ -193,7 +184,6 @@ def notifier():
                             if hs != oh or as_ != oa:
                                 cur.execute("UPDATE scores SET h_score=?, a_score=? WHERE event_id=?", (hs, as_, eid))
                                 conn.commit()
-                                # notify
                                 for chat_id, fav in db_get_favs():
                                     if fav in h["team"]["displayName"].lower() or fav in a["team"]["displayName"].lower():
                                         send(chat_id, f"⚽ *GOAL!* {h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}\n⏱️ {ev['status']['type']['detail']} | {wat(ev.get('date',''))}\n\nYour team {fav.title()} scored!", back_kb())
@@ -204,25 +194,21 @@ def notifier():
 
 threading.Thread(target=notifier, daemon=True).start()
 
-# --- MAIN LOOP ---
 offset = 0
-print("✅ FULL FINAL BOT RUNNING - Today fixed + Auto alerts + WAT")
+print("✅ BOT RUNNING")
 
 while True:
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={offset}&timeout=30"
         with urllib.request.urlopen(url, timeout=20) as r:
             data = json.loads(r.read().decode())
-
         for up in data.get("result", []):
             offset = up["update_id"] + 1
-
             if "callback_query" in up:
                 cb = up["callback_query"]
                 chat_id = cb["message"]["chat"]["id"]
                 d = cb["data"]
                 cid = cb["id"]
-
                 if d == "menu":
                     answer_cb(cid)
                     send(chat_id, "⚽ *Football Hub - All times WAT 🇳🇬*\nTap to navigate:", menu_kb())
@@ -233,56 +219,41 @@ while True:
                 elif d == "today":
                     answer_cb(cid, "Fetching today...")
                     g = get_today()
-                    txt = "📅 *Today's Games (WAT):*\n\n" + "\n\n".join(g) if g else "No games found today. Try again later or check EPL table."
+                    txt = "📅 *Today's Games (WAT):*\n\n" + "\n\n".join(g) if g else "No games found today."
                     send(chat_id, txt, back_kb())
                 elif d == "live":
                     answer_cb(cid, "Checking live...")
                     g = get_live()
-                    txt = "🔴 *Live Now:*\n\n" + "\n\n".join(g) if g else "😴 No live games now. Tap Today to see upcoming."
+                    txt = "🔴 *Live Now:*\n\n" + "\n\n".join(g) if g else "😴 No live games now."
                     send(chat_id, txt, back_kb())
                 elif d == "myteam":
                     answer_cb(cid)
                     cur.execute("SELECT team FROM favs WHERE chat_id=?", (str(chat_id),))
                     r = cur.fetchone()
                     if r:
-                        send(chat_id, f"⭐ Your team: *{r[0].title()}*\nYou will get GOAL alerts!\n\nTo change, type new team name like `Arsenal`", back_kb())
+                        send(chat_id, f"⭐ Your team: *{r[0].title()}*\nYou will get GOAL alerts!", back_kb())
                     else:
-                        send(chat_id, "⭐ No team yet. Type team name like `Arsenal` or `Galatasaray` to get auto alerts.", back_kb())
+                        send(chat_id, "⭐ No team yet. Type team name like `Arsenal`", back_kb())
                 continue
-
             if "message" not in up: continue
             chat_id = str(up["message"]["chat"]["id"])
             txt = up["message"].get("text","").strip()
             low = txt.lower().replace("@myfootballaiagent_bot","")
-
             if low.startswith("/start") or low == "menu":
-                send(chat_id, "⚽ *Welcome to Football Hub - Final Version!*\n\n✅ Today with WAT time (FIXED)\n✅ Live scores\n✅ Real tables + World Cup Spain champion\n✅ Auto GOAL alerts\n✅ Search any team\n\n*Tap below or type team name like Arsenal:*", menu_kb())
-
+                send(chat_id, "⚽ *Welcome to Football Hub - Final!*\n\n✅ Today with WAT time\n✅ Live scores\n✅ Real tables + World Cup\n✅ Auto GOAL alerts\n\n*Tap below or type team name like Arsenal:*", menu_kb())
             elif low.startswith("/today"):
                 g = get_today()
                 send(chat_id, "📅 *Today (WAT):*\n\n" + "\n\n".join(g) if g else "No games today", back_kb())
-
             elif low.startswith("/live"):
                 g = get_live()
                 send(chat_id, "🔴 *Live Now:*\n\n" + "\n\n".join(g) if g else "No live games now", back_kb())
-
-            elif low.startswith("/epl"): send(chat_id, REAL["eng.1"], back_kb())
-            elif low.startswith("/laliga"): send(chat_id, REAL["esp.1"], back_kb())
-            elif low.startswith("/seriea"): send(chat_id, REAL["ita.1"], back_kb())
-            elif low.startswith("/bundesliga"): send(chat_id, REAL["ger.1"], back_kb())
-            elif low.startswith("/turkey") or "süper" in low: send(chat_id, REAL["tur.1"], back_kb())
-            elif "worldcup" in low or low in ["wc","/wc"]: send(chat_id, REAL["fifa.world"], back_kb())
-            elif "ucl" in low or "champions" in low: send(chat_id, REAL["uefa.champions"], back_kb())
-
             elif len(low) >= 3 and not low.startswith("/"):
-                # Save as fav + search
                 db_add_fav(chat_id, low)
                 f = search_team(low)
                 if f:
                     send(chat_id, f"⭐ Saved *{txt.title()}* as your team! Goal alerts ON 🔔\n\n🔍 *Found today:*\n" + "\n".join(f), back_kb())
                 else:
-                    send(chat_id, f"⭐ Saved *{txt.title()}* as your team! You will get goal alerts.\n\nNo games for {txt.title()} today, but I will alert you when they play.", back_kb())
-
+                    send(chat_id, f"⭐ Saved *{txt.title()}*! You will get goal alerts.\n\nNo games for {txt.title()} today.", back_kb())
         time.sleep(1)
     except Exception as e:
         print("Loop error:", e)

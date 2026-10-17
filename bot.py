@@ -1,6 +1,22 @@
 import urllib.request, urllib.parse, json, time, sqlite3, threading, os
 from datetime import datetime, date
 
+# Fake web server for Render free
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_fake_server():
+    port = int(os.environ.get("PORT", 10000))
+    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+
+threading.Thread(target=run_fake_server, daemon=True).start()
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8995140935:AAHBISZnroMD6LWXou4cBBSE6B_4TRLzqtw")
 DB = "football.db"
 

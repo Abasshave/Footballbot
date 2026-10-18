@@ -1,88 +1,42 @@
-from flask import Flask
-from threading import Thread
 import os
-
-app = Flask(__name__)
-@app.route('/')
-def home():
-    return "Football Bot V8 FINAL - All Teams Live"
-
-def run_web():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port, use_reloader=False)
-
-Thread(target=run_web, daemon=True).start()
-
-import urllib.request
-import urllib.parse
+import io
 import json
 import time
 import sqlite3
 import threading
-from datetime import datetime, date
+import urllib.request
+import urllib.parse
+import urllib.error
+from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 
-TOKEN = os.environ.get("BOT_TOKEN")
-if not TOKEN:
-    print("ERROR: BOT_TOKEN not set!")
+from flask import Flask
+from PIL import Image, ImageDraw, ImageFont
 
-DB = "football.db"
-conn = sqlite3.connect(DB, check_same_thread=False)
-cur = conn.cursor()
-cur.execute("CREATE TABLE IF NOT EXISTS favs (chat_id TEXT, team TEXT)")
-cur.execute("CREATE TABLE IF NOT EXISTS scores (event_id TEXT PRIMARY KEY, home TEXT, away TEXT, h_score INTEGER, a_score INTEGER)")
-cur.execute("CREATE TABLE IF NOT EXISTS subs (chat_id TEXT PRIMARY KEY)")
-conn.commit()
+# ---------------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------------
 
-def db_add_fav(chat_id, team):
-    cur.execute("DELETE FROM favs WHERE chat_id=?", (str(chat_id),))
-    cur.execute("INSERT INTO favs VALUES (?,?)", (str(chat_id), team.lower()))
-    cur.execute("INSERT OR IGNORE INTO subs VALUES (?)", (str(chat_id),))
-    conn.commit()
+TOKEN = os.environ.get("BOT_TOKEN", "")
+API = "https://api.telegram.org/bot" + TOKEN + "/"
+UA = "Mozilla/5.0"
 
-def db_get_all_subs():
-    cur.execute("SELECT chat_id FROM subs")
-    return [r[0] for r in cur.fetchall()]
+ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer/"
+ESPN_V2 = "https://site.api.espn.com/apis/v2/sports/soccer/"
+ESPN_V2_ALT = "https://site.web.api.espn.com/apis/v2/sports/soccer/"
 
-def send(chat_id, text, keyboard=None):
-    try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-        if keyboard:
-            payload["reply_markup"] = json.dumps(keyboard)
-        req = urllib.request.Request(url, data=urllib.parse.urlencode(payload).encode(), headers={"User-Agent": "Mozilla/5.0"})
-        urllib.request.urlopen(req, timeout=15)
-    except Exception as e:
-        print(f"Send error {chat_id}: {e}")
+DB_PATH = "football_v9.db"
+NOTIFY_INTERVAL = 10
+PEN_CHECK_EVERY = 3
+MAX_PENDING_TRIES = 8
+SB_TTL = 8
+LOGO_SIZE = 30
 
-def answer_cb(cb_id, text=""):
-    try:
-        url = f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery"
-        payload = {"callback_query_id": cb_id, "text": text}
-        req = urllib.request.Request(url, data=urllib.parse.urlencode(payload).encode(), headers={"User-Agent": "Mozilla/5.0"})
-        urllib.request.urlopen(req, timeout=8)
-    except:
-        pass
-
-def fetch_json(url):
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return json.loads(r.read().decode())
-    except Exception as e:
-        print(f"fetch fail {url}: {e}")
-        return None
-
-def wat(iso):
-    try:
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        h = (dt.hour + 1) % 24
-        return f"{h:02d}:{dt.minute:02d} WAT"
-    except:
-        return ""
+LEAGUE_IDS = ["tur.1", "eng.1", "esp.1", "ger.1", "ita.1", "fra.1", "uefa.champions"]
 
 LEAGUE_NAMES = {
-    "eng.1": "Premier League 🏴󠁧󠁢󠁥󠁮󠁧󠁿",
     "tur.1": "Süper Lig 🇹🇷",
+    "eng.1": "Premier League 🏴󠁧󠁢󠁥󠁮󠁧󠁿",
     "esp.1": "La Liga 🇪🇸",
     "ger.1": "Bundesliga 🇩🇪",
     "ita.1": "Serie A 🇮🇹",
@@ -90,273 +44,629 @@ LEAGUE_NAMES = {
     "uefa.champions": "Champions League 🏆"
 }
 
-TEAM_LOGOS = {
-    "Galatasaray": "🦁", "Fenerbahce": "💛", "Fenerbahçe": "💛",
-    "Besiktas": "🦅", "Beşiktaş": "🦅", "Trabzonspor": "🔴",
-    "Arsenal": "🔴", "Man City": "💙", "Manchester City": "💙",
-    "Liverpool": "🔴", "Chelsea": "💙", "Real Betis": "💚",
-    "Barcelona": "🔵🔴", "Real Madrid": "👑"
+LEAGUE_TITLES = {
+    "tur.1": "Süper Lig",
+    "eng.1": "Premier League",
+    "esp.1": "La Liga",
+    "ger.1": "Bundesliga",
+    "ita.1": "Serie A",
+    "fra.1": "Ligue 1",
+    "uefa.champions": "Champions League"
 }
 
-def get_beautiful_table(lid):
-    endpoints = [
-        f"https://site.web.api.espn.com/apis/v2/sports/soccer/{lid}/standings",
-        f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/standings"
-    ]
-    entries = None
-    for url in endpoints:
-        data = fetch_json(url)
-        if not data:
-            continue
-        if "standings" in data and "entries" in data.get("standings", {}):
-            entries = data["standings"]["entries"]
-        elif "children" in data:
-            try:
-                entries = data["children"][0]["standings"]["entries"]
-            except:
-                pass
-        if entries:
-            break
+GOAL_KINDS = ["goal", "penalty", "own_goal"]
 
-    if not entries:
-        if "tur" in lid:
-            return "*Süper Lig 🇹🇷*\nTürkiye • 2026/2027\n```\n  Team            P  GD Pts\n 1 🦁 Galatasaray  8  6  19\n 2 💚 Amed         8  5  16\n 3 💛 Fenerbahce   8  4  14\n 4 🦅 Besiktas     8  2  12\n 5 🔵 Kasimpasa    8  0  11\n```\n_Refreshing live..._"
-        if "eng" in lid:
-            return "*Premier League 🏴󠁧󠁢󠁥󠁮󠁧󠁿*\n```\n  Team           P  GD Pts\n 1 🔴 Arsenal    8  8  18\n 2 💙 Man City   8  6  17\n 3 🔴 Liverpool  8  5  16\n```\n_Refreshing live..._"
-        return f"*{LEAGUE_NAMES.get(lid, lid)}*\nTable temporarily unavailable, try Matches."
+START_TEXT = (
+    "⚽ <b>Football Live</b>\n\n"
+    "Pick a league to see its table, or tap Live Now / Today.\n\n"
+    "🔔 Goal alerts are ON for every league.\n"
+    "Send /stop to turn them off."
+)
 
-    live_map = {}
+# ---------------------------------------------------------------
+# WEB SERVER (keeps Render happy)
+# ---------------------------------------------------------------
+
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+    return "Football Bot V9 is running"
+
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
+
+
+# ---------------------------------------------------------------
+# GLOBALS
+# ---------------------------------------------------------------
+
+fetch_pool = ThreadPoolExecutor(max_workers=8)
+update_pool = ThreadPoolExecutor(max_workers=8)
+
+db_lock = threading.Lock()
+conn = None
+
+SB_CACHE = {}
+LOGO_CACHE = {}
+FONT_CACHE = {}
+PENDING = {}
+
+# ---------------------------------------------------------------
+# TIME HELPERS
+# ---------------------------------------------------------------
+
+
+def now_wat():
+    return datetime.now(timezone.utc) + timedelta(hours=1)
+
+
+def stamp():
+    return now_wat().strftime("%H:%M:%S") + " WAT"
+
+
+def today_str():
+    return datetime.now(timezone.utc).strftime("%Y%m%d")
+
+
+def scoreboard_dates():
+    now = datetime.now(timezone.utc)
+    dates = [now.strftime("%Y%m%d")]
+    if now.hour < 3:
+        dates.insert(0, (now - timedelta(days=1)).strftime("%Y%m%d"))
+    return dates
+
+
+def kickoff_wat(iso):
     try:
-        today_str = date.today().strftime("%Y%m%d")
-        sd = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today_str}")
-        if sd:
-            for ev in sd.get("events", []):
-                if ev.get("status", {}).get("type", {}).get("state") == "in":
-                    comp = ev["competitions"][0]
-                    h = comp["competitors"][0]
-                    a = comp["competitors"][1]
-                    score = f"{h.get('score','0')}-{a.get('score','0')}"
-                    live_map[h["team"]["displayName"].lower()] = score
-                    live_map[a["team"]["displayName"].lower()] = score
-    except:
-        pass
-
-    title = LEAGUE_NAMES.get(lid, lid)
-    txt = f"*{title}*\n"
-    if "tur" in lid:
-        txt += "Türkiye • 2026/2027\n"
-    txt += "━━━━━━━━━━━━━━━━\n"
-    txt += "```\n"
-    txt += f"  # Team         Live   P  GD Pts\n"
-    for i, e in enumerate(entries[:10], 1):
-        full = e.get("team", {}).get("displayName", "")
-        short = e.get("team", {}).get("shortDisplayName", full)[:11]
-        logo = TEAM_LOGOS.get(full, TEAM_LOGOS.get(short, "⚽"))
-        stats = {s['name']: s.get('value', 0) for s in e.get("stats", [])}
-        p = stats.get("gamesPlayed", 0)
-        if p == 0:
-            p = stats.get("wins", 0) + stats.get("losses", 0) + stats.get("ties", 0)
-        gd = stats.get("pointDifferential", 0)
-        pts = stats.get("points", 0)
-        pill = live_map.get(full.lower(), "")
-        pill_txt = f"[{pill}]" if pill else ""
-        txt += f"{i:2} {logo} {short:<11} {pill_txt:<5} {p:2} {gd:3} {pts:3}\n"
-    txt += "```\n"
-    txt += f"Updated {datetime.now().strftime('%H:%M')} WAT"
-    return txt
-
-def get_matches_text(lid, only_live=False):
-    today_str = date.today().strftime("%Y%m%d")
-    data = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today_str}")
-    if not data or not data.get("events"):
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        dt = dt + timedelta(hours=1)
+        return dt.strftime("%H:%M") + " WAT"
+    except Exception:
         return ""
-    out = ""
-    for ev in data["events"]:
-        state = ev.get("status", {}).get("type", {}).get("state", "")
-        if only_live and state != "in":
-            continue
-        comp = ev["competitions"][0]
-        teams = comp["competitors"]
-        h = next((t for t in teams if t.get("homeAway") == "home"), teams[0])
-        a = next((t for t in teams if t.get("homeAway") == "away"), teams[1])
-        det = ev["status"]["type"]["detail"]
-        icon = "🔴" if state == "in" else "✅" if state == "post" else "🕒"
-        out += f"{icon} {h['team']['shortDisplayName']} {h.get('score','0')}-{a.get('score','0')} {a['team']['shortDisplayName']} • {det} • {wat(ev['date'])}\n"
-    return out
 
-def get_stats(event_id, lid):
-    data = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/summary?event={event_id}")
-    if not data:
-        return "Match Stats not yet available."
+
+def esc(text):
+    text = str(text)
+    text = text.replace("&", "&amp;")
+    text = text.replace("<", "&lt;")
+    text = text.replace(">", "&gt;")
+    return text
+
+
+# ---------------------------------------------------------------
+# DATABASE
+# ---------------------------------------------------------------
+
+
+def init_db():
+    global conn
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    db_exec("CREATE TABLE IF NOT EXISTS subs (chat_id TEXT PRIMARY KEY)")
+    db_exec("CREATE TABLE IF NOT EXISTS scores (event_id TEXT PRIMARY KEY, h_score INTEGER, a_score INTEGER)")
+    db_exec("CREATE TABLE IF NOT EXISTS alerted (event_id TEXT, play_key TEXT, PRIMARY KEY (event_id, play_key))")
+
+
+def db_exec(sql, params=()):
+    with db_lock:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        conn.commit()
+        return cur.fetchall()
+
+
+def db_add_sub(chat_id):
+    db_exec("INSERT OR IGNORE INTO subs (chat_id) VALUES (?)", (str(chat_id),))
+
+
+def db_remove_sub(chat_id):
+    db_exec("DELETE FROM subs WHERE chat_id=?", (str(chat_id),))
+
+
+def db_get_subs():
+    rows = db_exec("SELECT chat_id FROM subs")
+    return [r[0] for r in rows]
+
+
+def db_get_score(event_id):
+    rows = db_exec("SELECT h_score, a_score FROM scores WHERE event_id=?", (event_id,))
+    if rows:
+        return rows[0]
+    return None
+
+
+def db_set_score(event_id, hs, a_s):
+    db_exec("INSERT OR REPLACE INTO scores (event_id, h_score, a_score) VALUES (?,?,?)", (event_id, hs, a_s))
+
+
+def db_is_seen(event_id, key):
+    rows = db_exec("SELECT 1 FROM alerted WHERE event_id=? AND play_key=?", (event_id, key))
+    return len(rows) > 0
+
+
+def db_mark_seen(event_id, key):
+    db_exec("INSERT OR IGNORE INTO alerted (event_id, play_key) VALUES (?,?)", (event_id, key))
+
+
+# ---------------------------------------------------------------
+# HTTP HELPERS
+# ---------------------------------------------------------------
+
+
+def fetch_json(url):
     try:
-        comp = data["header"]["competitions"][0]
-        teams = comp["competitors"]
-        h = next((t for t in teams if t.get("homeAway") == "home"), teams[0])
-        a = next((t for t in teams if t.get("homeAway") == "away"), teams[1])
-        txt = f"*Match Stats*\n{h['team']['displayName']} {h.get('score','0')}-{a.get('score','0')} {a['team']['displayName']}\n{comp['status']['type']['detail']}\n\n"
-        for tm in data.get("boxscore", {}).get("teams", [])[:2]:
-            txt += f"*{tm.get('team',{}).get('displayName','')}*\n"
-            for s in tm.get("statistics", [])[:6]:
-                txt += f"{s['name']}: {s['displayValue']}\n"
-            txt += "\n"
-        return txt[:3500]
-    except:
-        return "Stats loading..."
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as err:
+        print("fetch fail " + url + " : " + str(err))
+        return None
+
+
+def fetch_bytes(url):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.read()
+    except Exception as err:
+        print("fetch bytes fail " + url + " : " + str(err))
+        return None
+
+
+def encode_multipart(fields, files):
+    boundary = "----fbbot" + os.urandom(8).hex()
+    parts = []
+    for name, value in fields.items():
+        parts.append(("--" + boundary + "\r\n").encode("utf-8"))
+        parts.append(('Content-Disposition: form-data; name="' + name + '"\r\n\r\n').encode("utf-8"))
+        parts.append(str(value).encode("utf-8"))
+        parts.append(b"\r\n")
+    for name, item in files.items():
+        filename = item[0]
+        content = item[1]
+        ctype = item[2]
+        parts.append(("--" + boundary + "\r\n").encode("utf-8"))
+        parts.append(('Content-Disposition: form-data; name="' + name + '"; filename="' + filename + '"\r\n').encode("utf-8"))
+        parts.append(("Content-Type: " + ctype + "\r\n\r\n").encode("utf-8"))
+        parts.append(content)
+        parts.append(b"\r\n")
+    parts.append(("--" + boundary + "--\r\n").encode("utf-8"))
+    body = b"".join(parts)
+    return body, "multipart/form-data; boundary=" + boundary
+
+
+def tg_call(method, params=None, files=None, timeout=30):
+    if params is None:
+        params = {}
+    if files:
+        body, ctype = encode_multipart(params, files)
+    else:
+        body = urllib.parse.urlencode(params).encode("utf-8")
+        ctype = "application/x-www-form-urlencoded"
+    req = urllib.request.Request(API + method, data=body, headers={"Content-Type": ctype, "User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        try:
+            return json.loads(err.read().decode("utf-8"))
+        except Exception:
+            return {"ok": False, "error_code": err.code, "description": "HTTP error " + str(err.code)}
+    except Exception as err:
+        return {"ok": False, "error_code": 0, "description": str(err)}
+
+
+def is_not_modified(res):
+    return "not modified" in str(res.get("description", "")).lower()
+
+
+def send_text(chat_id, text, kb=None):
+    params = {
+        "chat_id": str(chat_id),
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": "true"
+    }
+    if kb:
+        params["reply_markup"] = json.dumps(kb)
+    return tg_call("sendMessage", params)
+
+
+def edit_text(chat_id, message_id, text, kb=None):
+    params = {
+        "chat_id": str(chat_id),
+        "message_id": str(message_id),
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": "true"
+    }
+    if kb:
+        params["reply_markup"] = json.dumps(kb)
+    return tg_call("editMessageText", params)
+
+
+def send_photo(chat_id, png, kb=None):
+    params = {"chat_id": str(chat_id)}
+    if kb:
+        params["reply_markup"] = json.dumps(kb)
+    files = {"photo": ("table.png", png, "image/png")}
+    return tg_call("sendPhoto", params, files, 60)
+
+
+def edit_photo(chat_id, message_id, png, kb=None):
+    media = {"type": "photo", "media": "attach://photo"}
+    params = {
+        "chat_id": str(chat_id),
+        "message_id": str(message_id),
+        "media": json.dumps(media)
+    }
+    if kb:
+        params["reply_markup"] = json.dumps(kb)
+    files = {"photo": ("table.png", png, "image/png")}
+    return tg_call("editMessageMedia", params, files, 60)
+
+
+def delete_msg(chat_id, message_id):
+    return tg_call("deleteMessage", {"chat_id": str(chat_id), "message_id": str(message_id)}, None, 15)
+
+
+def answer_cb(cb_id, text=""):
+    return tg_call("answerCallbackQuery", {"callback_query_id": str(cb_id), "text": text}, None, 10)
+
+
+def show_text(chat_id, msg, text, kb):
+    message_id = msg.get("message_id")
+    if msg.get("photo"):
+        res = send_text(chat_id, text, kb)
+        if res.get("ok"):
+            delete_msg(chat_id, message_id)
+        else:
+            print("send text failed: " + str(res.get("description")))
+        return
+    res = edit_text(chat_id, message_id, text, kb)
+    if res.get("ok") or is_not_modified(res):
+        return
+    print("edit text failed: " + str(res.get("description")))
+    send_text(chat_id, text, kb)
+
+
+def show_photo(chat_id, msg, png, kb):
+    message_id = msg.get("message_id")
+    if msg.get("photo"):
+        res = edit_photo(chat_id, message_id, png, kb)
+        if res.get("ok") or is_not_modified(res):
+            return
+        print("edit photo failed: " + str(res.get("description")))
+    res = send_photo(chat_id, png, kb)
+    if res.get("ok"):
+        delete_msg(chat_id, message_id)
+    else:
+        print("send photo failed: " + str(res.get("description")))
+
+
+# ---------------------------------------------------------------
+# KEYBOARDS
+# ---------------------------------------------------------------
+
 
 def main_menu():
     return {"inline_keyboard": [
-        [{"text": "🇹🇷 Süper Lig", "callback_data": "league_tur.1"}, {"text": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL", "callback_data": "league_eng.1"}],
-        [{"text": "🏆 Champions League", "callback_data": "league_uefa.champions"}, {"text": "🇪🇸 La Liga", "callback_data": "league_esp.1"}],
-        [{"text": "🇩🇪 Bundesliga", "callback_data": "league_ger.1"}, {"text": "🇮🇹 Serie A", "callback_data": "league_ita.1"}],
-        [{"text": "🔴 Live Now", "callback_data": "live"}, {"text": "📅 Today", "callback_data": "today"}],
-        [{"text": "⭐ My Team", "callback_data": "myteam"}]
+        [
+            {"text": "🇹🇷 Süper Lig", "callback_data": "tbl:tur.1"},
+            {"text": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL", "callback_data": "tbl:eng.1"}
+        ],
+        [
+            {"text": "🇪🇸 La Liga", "callback_data": "tbl:esp.1"},
+            {"text": "🇩🇪 Bundesliga", "callback_data": "tbl:ger.1"}
+        ],
+        [
+            {"text": "🇮🇹 Serie A", "callback_data": "tbl:ita.1"},
+            {"text": "🏆 Champions League", "callback_data": "tbl:uefa.champions"}
+        ],
+        [
+            {"text": "🔴 Live Now", "callback_data": "live"},
+            {"text": "📅 Today", "callback_data": "today"}
+        ]
     ]}
 
-def league_tabs(lid):
+
+def table_kb(lid):
     return {"inline_keyboard": [
-        [{"text": "📊 Table", "callback_data": f"table_{lid}"}, {"text": "⚽ Matches", "callback_data": f"matches_{lid}"}],
-        [{"text": "🏆 UCL", "callback_data": "league_uefa.champions"}, {"text": "🇹🇷 Süper Lig", "callback_data": "league_tur.1"}],
+        [
+            {"text": "📊 Table", "callback_data": "tbl:" + lid},
+            {"text": "⚽ Matches", "callback_data": "mat:" + lid}
+        ],
+        [{"text": "🔄 Refresh Table", "callback_data": "tbl:" + lid}],
         [{"text": "⬅️ Main Menu", "callback_data": "menu"}]
     ]}
 
-def notifier_all_teams():
-    print("🔴 Notifier FOR ALL TEAMS started - 15 sec")
-    while True:
-        try:
-            today_str = date.today().strftime("%Y%m%d")
-            for lid in ["esp.1", "eng.1", "tur.1", "ita.1", "ger.1", "fra.1", "uefa.champions"]:
-                data = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today_str}")
-                if not data:
-                    continue
-                for ev in data.get("events", []):
-                    if ev.get("status", {}).get("type", {}).get("state") != "in":
-                        continue
-                    eid = ev["id"]
-                    comp = ev["competitions"][0]
-                    teams = comp["competitors"]
-                    h = next((t for t in teams if t.get("homeAway") == "home"), teams[0])
-                    a = next((t for t in teams if t.get("homeAway") == "away"), teams[1])
-                    hs = int(h.get("score", 0) or 0)
-                    as_ = int(a.get("score", 0) or 0)
-                    minute = ev["status"]["type"]["detail"]
 
-                    cur.execute("SELECT h_score, a_score FROM scores WHERE event_id=?", (eid,))
-                    row = cur.fetchone()
-                    if not row:
-                        cur.execute("INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?)", (eid, h["team"]["displayName"], a["team"]["displayName"], hs, as_))
-                        conn.commit()
-                    else:
-                        oh, oa = row
-                        if hs != oh or as_ != oa:
-                            cur.execute("UPDATE scores SET h_score=?, a_score=? WHERE event_id=?", (hs, as_, eid))
-                            conn.commit()
-                            msg = f"⚽ {h['team']['displayName']} - {a['team']['displayName']}:\n{minute} Goal!\nNew score is {hs} - {as_}"
-                            kb = {"inline_keyboard": [[{"text": "Match Stats", "callback_data": f"stats_{lid}_{eid}"}]]}
-                            for chat_id in db_get_all_subs():
-                                send(chat_id, msg, kb)
-                            print(f"GOAL PUSHED: {msg}")
-            time.sleep(15)
-        except Exception as e:
-            print(f"Notifier error: {e}")
-            time.sleep(15)
+def matches_kb(lid):
+    return {"inline_keyboard": [
+        [
+            {"text": "📊 Table", "callback_data": "tbl:" + lid},
+            {"text": "⚽ Matches", "callback_data": "mat:" + lid}
+        ],
+        [{"text": "🔄 Refresh Matches", "callback_data": "mat:" + lid}],
+        [{"text": "⬅️ Main Menu", "callback_data": "menu"}]
+    ]}
 
-threading.Thread(target=notifier_all_teams, daemon=True).start()
 
-offset = 0
-print("✅ V8 FINAL RUNNING - ALL TEAMS")
+def live_kb():
+    return {"inline_keyboard": [
+        [
+            {"text": "🔄 Refresh", "callback_data": "live"},
+            {"text": "📅 Today", "callback_data": "today"}
+        ],
+        [{"text": "⬅️ Main Menu", "callback_data": "menu"}]
+    ]}
 
-while True:
+
+def today_kb():
+    return {"inline_keyboard": [
+        [
+            {"text": "🔄 Refresh", "callback_data": "today"},
+            {"text": "🔴 Live Now", "callback_data": "live"}
+        ],
+        [{"text": "⬅️ Main Menu", "callback_data": "menu"}]
+    ]}
+
+
+# ---------------------------------------------------------------
+# SCOREBOARD + MATCH TEXT
+# ---------------------------------------------------------------
+
+
+def scoreboard_url(lid, date_str):
+    return ESPN + lid + "/scoreboard?dates=" + date_str
+
+
+def get_scoreboard(lid, fresh=False):
+    now = time.time()
+    cached = SB_CACHE.get(lid)
+    if cached and not fresh and (now - cached[0]) < SB_TTL:
+        return cached[1]
+    data = fetch_json(scoreboard_url(lid, today_str()))
+    if data is not None:
+        SB_CACHE[lid] = (now, data)
+    return data
+
+
+def get_scoreboards(lids):
+    return list(fetch_pool.map(get_scoreboard, lids))
+
+
+def split_teams(comp):
+    teams = comp.get("competitors") or []
+    home = None
+    away = None
+    for t in teams:
+        if t.get("homeAway") == "home":
+            home = t
+        elif t.get("homeAway") == "away":
+            away = t
+    if home is None and len(teams) > 0:
+        home = teams[0]
+    if away is None and len(teams) > 1:
+        away = teams[1]
+    return home, away
+
+
+def score_int(team_obj):
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={offset}&timeout=30"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=35) as r:
-            data = json.loads(r.read().decode())
+        return int(team_obj.get("score", 0) or 0)
+    except Exception:
+        return 0
 
-        for up in data.get("result", []):
-            offset = up["update_id"] + 1
 
-            if "callback_query" in up:
-                cb = up["callback_query"]
-                chat_id = cb["message"]["chat"]["id"]
-                d = cb["data"]
-                cid = cb["id"]
+def short_name(team_obj):
+    team = team_obj.get("team") or {}
+    return team.get("shortDisplayName") or team.get("displayName") or team.get("name") or "?"
 
-                if d == "menu":
-                    answer_cb(cid)
-                    send(chat_id, "⚽ *Football Hub* - All Teams Live ✨", main_menu())
 
-                elif d.startswith("league_") or d.startswith("table_"):
-                    lid = d.replace("league_", "").replace("table_", "")
-                    answer_cb(cid, "Loading table...")
-                    tbl = get_beautiful_table(lid)
-                    send(chat_id, tbl, league_tabs(lid))
+def match_line(ev):
+    comps = ev.get("competitions") or []
+    if not comps:
+        return ""
+    home, away = split_teams(comps[0])
+    if home is None or away is None:
+        return ""
+    stype = (ev.get("status") or {}).get("type") or {}
+    state = stype.get("state", "")
+    if state == "pre":
+        icon = "🕒"
+        score = "vs"
+        info = kickoff_wat(ev.get("date", ""))
+    elif state == "in":
+        icon = "🔴"
+        score = str(score_int(home)) + "-" + str(score_int(away))
+        info = stype.get("shortDetail") or stype.get("detail") or "LIVE"
+    else:
+        icon = "✅"
+        score = str(score_int(home)) + "-" + str(score_int(away))
+        info = stype.get("shortDetail") or stype.get("detail") or "FT"
+    return icon + " " + esc(short_name(home)) + " " + score + " " + esc(short_name(away)) + " • " + esc(info)
 
-                elif d.startswith("matches_"):
-                    lid = d.replace("matches_", "")
-                    answer_cb(cid, "Loading matches...")
-                    txt = get_matches_text(lid, only_live=False)
-                    if not txt:
-                        txt = f"No matches today for {LEAGUE_NAMES.get(lid, lid)}"
-                    else:
-                        txt = f"*{LEAGUE_NAMES.get(lid, lid)} - Today WAT*\n\n" + txt
-                    send(chat_id, txt, league_tabs(lid))
 
-                elif d == "live":
-                    answer_cb(cid, "Checking live...")
-                    live_txt = "🔴 *Live Now + Auto Feed ON*\nYou will get goals auto\n\n"
-                    found = False
-                    for lid in ["tur.1", "eng.1", "esp.1", "ita.1", "ger.1", "uefa.champions"]:
-                        m = get_matches_text(lid, only_live=True)
-                        if m:
-                            live_txt += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"
-                            found = True
-                    if not found:
-                        live_txt += "😴 No games live RIGHT NOW.\nFeed is still ON - next goal will auto-drop!\n\nCheck Today tab for schedule."
-                    send(chat_id, live_txt[:3800], {"inline_keyboard": [[{"text": "📅 Today", "callback_data": "today"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]})
+def league_matches(data, only_live):
+    lines = []
+    if not data:
+        return lines
+    for ev in data.get("events") or []:
+        stype = (ev.get("status") or {}).get("type") or {}
+        if only_live and stype.get("state") != "in":
+            continue
+        line = match_line(ev)
+        if line:
+            lines.append(line)
+    return lines
 
-                elif d == "today":
-                    answer_cb(cid, "Loading today...")
-                    full = ""
-                    for lid in ["tur.1", "eng.1", "esp.1", "ger.1", "ita.1", "fra.1", "uefa.champions"]:
-                        m = get_matches_text(lid, only_live=False)
-                        if m:
-                            full += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"
-                    if not full:
-                        full = "No matches today. Check tomorrow."
-                    send(chat_id, full[:3800], {"inline_keyboard": [[{"text": "🔴 Live Now", "callback_data": "live"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]})
 
-                elif d.startswith("stats_"):
-                    _, lid, eid = d.split("_", 2)
-                    answer_cb(cid, "Loading stats...")
-                    send(chat_id, get_stats(eid, lid), {"inline_keyboard": [[{"text": "⬅️ Menu", "callback_data": "menu"}]]})
+def build_matches_text(lid):
+    data = get_scoreboard(lid)
+    lines = league_matches(data, False)
+    text = "⚽ <b>" + esc(LEAGUE_NAMES.get(lid, lid)) + "</b> - Today (WAT)\n\n"
+    if data is None:
+        text += "Could not load matches. Tap Refresh."
+    elif not lines:
+        text += "No matches today."
+    else:
+        text += "\n".join(lines)
+    text += "\n\n🔄 Updated " + stamp()
+    return text[:4000]
 
-                elif d == "myteam":
-                    answer_cb(cid)
-                    cur.execute("SELECT team FROM favs WHERE chat_id=?", (str(chat_id),))
-                    row = cur.fetchone()
-                    if row:
-                        send(chat_id, f"⭐ Your team: *{row[0].title()}*\nYou get ALL goals + extra for your team.", {"inline_keyboard": [[{"text": "⬅️ Menu", "callback_data": "menu"}]]})
-                    else:
-                        send(chat_id, "Type team name like `Galatasaray` or `Arsenal`", {"inline_keyboard": [[{"text": "⬅️ Menu", "callback_data": "menu"}]]})
-                continue
 
-            if "message" not in up:
-                continue
+def build_multi_text(only_live):
+    results = get_scoreboards(LEAGUE_IDS)
+    blocks = []
+    for lid, data in zip(LEAGUE_IDS, results):
+        lines = league_matches(data, only_live)
+        if lines:
+            blocks.append("<b>" + esc(LEAGUE_NAMES[lid]) + "</b>\n" + "\n".join(lines))
+    if only_live:
+        text = "🔴 <b>Live Now</b>\n\n"
+        empty = "😴 No games are live right now.\nGoal alerts stay ON, you will be notified automatically."
+    else:
+        text = "📅 <b>Today's Matches</b> (WAT)\n\n"
+        empty = "No matches today in the top leagues."
+    if not blocks:
+        text += empty + "\n\n"
+    for block in blocks:
+        if len(text) + len(block) > 3800:
+            text += "…more matches not shown\n\n"
+            break
+        text += block + "\n\n"
+    text += "🔄 Updated " + stamp()
+    return text
 
-            chat_id = str(up["message"]["chat"]["id"])
-            text = up["message"].get("text", "").strip()
-            low = text.lower()
 
-            if low.startswith("/start") or low == "menu":
-                cur.execute("INSERT OR IGNORE INTO subs VALUES (?)", (chat_id,))
-                conn.commit()
-                send(chat_id, "⚽ *Football Live Goals V8 FINAL* ✅\n\n✅ Süper Lig table: P GD Pts with 🦁 logos\n✅ EPL, La Liga, Bundesliga, Serie A, UCL\n✅ 📅 Today = all matches WAT\n✅ 🔴 Live Now = shows live games + auto goal push\n✅ ⚽ Auto push: `New score is 1-1` + Match Stats\n\nFor ALL TEAMS - you get every goal!\n\nTap league:", main_menu())
+# ---------------------------------------------------------------
+# TABLE IMAGE
+# ---------------------------------------------------------------
 
-            elif len(low) >= 3 and not low.startswith("/"):
-                db_add_fav(chat_id, text)
-                send(chat_id, f"⭐ *{text.title()}* saved! You get ALL goals + extra alerts for {text.title()}", main_menu())
 
-        time.sleep(1)
-    except Exception as e:
-        print(f"Loop error: {e}")
-        time.sleep(3)
+def get_standings(lid):
+    urls = [ESPN_V2 + lid + "/standings", ESPN_V2_ALT + lid + "/standings"]
+    for url in urls:
+        data = fetch_json(url)
+        if not data:
+            continue
+        entries = []
+        children = data.get("children")
+        if children:
+            for child in children:
+                entries.extend((child.get("standings") or {}).get("entries") or [])
+        elif data.get("standings"):
+            entries = data["standings"].get("entries") or []
+        if entries:
+            return entries
+    return []
+
+
+def num(stats, names):
+    for name in names:
+        value = stats.get(name)
+        if value is None:
+            continue
+        try:
+            return int(float(value))
+        except Exception:
+            continue
+    return 0
+
+
+def get_table_rows(lid):
+    entries = get_standings(lid)
+    rows = []
+    for e in entries:
+        team = e.get("team") or {}
+        stats = {}
+        for s in e.get("stats") or []:
+            if isinstance(s, dict):
+                stats[s.get("name")] = s.get("value")
+        played = num(stats, ["gamesPlayed"])
+        if played == 0:
+            played = num(stats, ["wins"]) + num(stats, ["losses"]) + num(stats, ["ties", "draws"])
+        logo = ""
+        logos = team.get("logos") or []
+        if logos and isinstance(logos[0], dict):
+            logo = logos[0].get("href", "")
+        full = team.get("displayName") or team.get("name") or "?"
+        rows.append({
+            "id": str(team.get("id", "")),
+            "full": full,
+            "name": team.get("shortDisplayName") or full,
+            "logo": logo,
+            "p": played,
+            "gd": num(stats, ["pointDifferential", "goalDifferential"]),
+            "pts": num(stats, ["points"]),
+            "rank": num(stats, ["rank"])
+        })
+    if rows and all(r["rank"] > 0 for r in rows):
+        rows.sort(key=lambda r: r["rank"])
+    else:
+        rows.sort(key=lambda r: (-r["pts"], -r["gd"]))
+    return rows
+
+
+def get_live_map(lid):
+    live = {}
+    data = get_scoreboard(lid)
+    if not data:
+        return live
+    for ev in data.get("events") or []:
+        stype = (ev.get("status") or {}).get("type") or {}
+        if stype.get("state") != "in":
+            continue
+        comps = ev.get("competitions") or []
+        if not comps:
+            continue
+        home, away = split_teams(comps[0])
+        if home is None or away is None:
+            continue
+        hs = score_int(home)
+        a_s = score_int(away)
+        hteam = home.get("team") or {}
+        ateam = away.get("team") or {}
+        home_score = str(hs) + "-" + str(a_s)
+        away_score = str(a_s) + "-" + str(hs)
+        live[str(hteam.get("id", ""))] = home_score
+        live[str(ateam.get("id", ""))] = away_score
+        live[str(hteam.get("displayName", "")).lower()] = home_score
+        live[str(ateam.get("displayName", "")).lower()] = away_score
+    return live
+
+
+def load_logo(url):
+    if not url:
+        return None
+    if url in LOGO_CACHE:
+        return LOGO_CACHE[url]
+    raw = fetch_bytes(url)
+    if not raw:
+        return None
+    try:
+        img = Image.open(io.BytesIO(raw)).convert("RGBA")
+        img.thumbnail((LOGO_SIZE, LOGO_SIZE))
+    except Exception as err:
+        print("logo decode fail: " + str(err))
+        return None
+    LOGO_CACHE[url] = img
+    return img
+
+
+def get_font(size, bold=False):
+    key = (size, bold)
+    if key in FONT_CACHE:
+        return FONT_CACHE[key]
+    if bold:
+        candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "DejaVuSans-Bold.ttf",
+            "arialbd.ttf"
+        ]
+    else:
+        candidates 

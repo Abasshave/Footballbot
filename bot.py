@@ -3,7 +3,7 @@ from threading import Thread
 import os
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Football Bot V11 - Final Fixed"
+def home(): return "Football Bot V11.2 - Main Menu Fixed"
 def run_web():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), use_reloader=False)
 Thread(target=run_web, daemon=True).start()
@@ -48,7 +48,7 @@ def edit_msg(chat_id, msg_id, text, kb=None):
         req = urllib.request.Request(url, data=urllib.parse.urlencode(p).encode(), headers={"User-Agent": "Mozilla/5.0"})
         urllib.request.urlopen(req, timeout=12)
     except Exception as e:
-        print("edit err, sending new:", e)
+        print("edit err", e)
         send(chat_id, text, kb)
 
 def answer_cb(cid, txt=""):
@@ -62,7 +62,7 @@ def answer_cb(cid, txt=""):
 
 def fetch_json(url):
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as r:
             return json.loads(r.read().decode())
     except:
@@ -76,24 +76,18 @@ def wat(iso):
         return ""
 
 LEAGUE_NAMES = {"eng.1": "Premier League 🏴󠁧󠁢󠁥󠁮󠁧󠁿", "tur.1": "Süper Lig 🇹🇷", "esp.1": "La Liga 🇪🇸", "ger.1": "Bundesliga 🇩🇪", "ita.1": "Serie A 🇮🇹", "uefa.champions": "Champions League 🏆"}
-TEAM_LOGOS = {"Galatasaray": "🦁", "Fenerbahce": "💛", "Fenerbahçe": "💛", "Besiktas": "🦅", "Beşiktaş": "🦅", "Trabzonspor": "🔴", "Arsenal": "🔴", "Man City": "💙", "Kasimpasa": "🔵", "Kasımpaşa": "🔵", "Samsunspor": "🔴"}
+TEAM_LOGOS = {"Galatasaray": "🦁", "Fenerbahce": "💛", "Fenerbahçe": "💛", "Besiktas": "🦅", "Beşiktaş": "🦅", "Kasimpasa": "🔵", "Kasımpaşa": "🔵"}
 
 def get_last_goal_detail(event_id, lid):
     try:
         d = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/summary?event={event_id}")
         if not d: return "", "⚽ Goal"
-        plays = d.get("commentary", []) or d.get("header", {}).get("competitions", [{}])[0].get("details", []) or []
-        for play in reversed(plays[-25:]):
+        for play in reversed((d.get("commentary", []) or [])[-25:]):
             txt = (play.get("text", "") + " " + play.get("type", {}).get("text", "")).lower()
             if "goal" in txt:
-                scorer = ""
-                if play.get("athletesInvolved"): scorer = play["athletesInvolved"][0].get("displayName", "")
-                if not scorer:
-                    m = re.search(r"-\s*([A-Z][a-z]+(?: [A-Z][a-z]+)?)", play.get("text", ""))
-                    if m: scorer = m.group(1)
+                scorer = play.get("athletesInvolved", [{}])[0].get("displayName", "") if play.get("athletesInvolved") else ""
                 if "penalty" in txt: return scorer, "🎯 Penalty"
-                if "own goal" in txt or "own-goal" in txt: return scorer, "😱 Own Goal"
-                if "header" in txt: return scorer, "⚽ Header"
+                if "own goal" in txt: return scorer, "😱 Own Goal"
                 return scorer, "⚽ Normal Goal"
         return "", "⚽ Goal"
     except:
@@ -146,14 +140,13 @@ def get_beautiful_table(lid):
         if lm:
             sc = lm["score"]; res = lm["res"]; add_pts = lm["add_pts"]; add_gd = lm["add_gd"]
             new_gd = gd + add_gd; new_pts = pts + add_pts
-            if res == "win": pill = f"🟩 {sc}"; pts_str = f"{pts}→{new_pts}🟢"
-            elif res == "lose": pill = f"🟥 {sc}"; pts_str = f"{pts}→{pts}🔴"
-            else: pill = f"🟨 {sc}"; pts_str = f"{pts}→{new_pts}🟡"
+            if res == "win": pill = f"🟩 {sc}"; pts_str = f"{pts}->{new_pts}🟢"
+            elif res == "lose": pill = f"🟥 {sc}"; pts_str = f"{pts}->{pts}🔴"
+            else: pill = f"🟨 {sc}"; pts_str = f"{pts}->{new_pts}🟡"
             txt += f"{i:2} {logo} {short:<11} {pill:<6} {p:2} {new_gd:3} {pts_str:<7}\n"
         else:
             txt += f"{i:2} {logo} {short:<11} {'':6} {p:2} {gd:3} {pts:3}\n"
-    txt += "```\n"
-    txt += f"🔴=losing live 🟩=winning 🟨=draw | {datetime.now().strftime('%H:%M')} WAT"
+    txt += "```\n🔴=losing 🟩=winning | WAT"
     return txt
 
 def get_matches(lid, only_live=False):
@@ -208,7 +201,7 @@ def league_tabs(lid):
     ]}
 
 def notifier():
-    print("🔴 Notifier V11 ON - goals + scorer")
+    print("🔴 Notifier V11.2 ON")
     while True:
         try:
             today = date.today().strftime("%Y%m%d")
@@ -235,7 +228,7 @@ def notifier():
                             else:
                                 if scorer: msg = f"⚽ *{h['team']['displayName']} - {a['team']['displayName']}*\n{minute} {scorer} — {gtype}\nNew score *{hs}-{as_}*"
                                 else: msg = f"⚽ *{h['team']['displayName']} - {a['team']['displayName']}*\n{minute} {gtype}\nNew score *{hs}-{as_}*"
-                            kb = {"inline_keyboard": [[{"text": "Match Stats", "callback_data": f"stats_{lid}_{eid}"}], [{"text": "🔄 Refresh Live", "callback_data": "live"}]]}
+                            kb = {"inline_keyboard": [[{"text": "Match Stats", "callback_data": f"stats_{lid}_{eid}"}], [{"text": "🔄 Refresh Live", "callback_data": "refresh_live"}]]}
                             for chat_id in db_get_all(): send(chat_id, msg, kb)
             time.sleep(12)
         except Exception as e:
@@ -244,7 +237,7 @@ def notifier():
 threading.Thread(target=notifier, daemon=True).start()
 
 offset = 0
-print("✅ V11 FINAL RUNNING")
+print("✅ V11.2 RUNNING - Main Menu Stays")
 while True:
     try:
         req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={offset}&timeout=30", headers={"User-Agent": "Mozilla/5.0"})
@@ -253,38 +246,94 @@ while True:
             offset = up["update_id"] + 1
             if "callback_query" in up:
                 cb = up["callback_query"]; chat_id = cb["message"]["chat"]["id"]; msg_id = cb["message"]["message_id"]; d = cb["data"]; cid = cb["id"]
+                
                 if d == "menu":
-                    answer_cb(cid); edit_msg(chat_id, msg_id, "⚽ *Football Hub*\nChoose league:", main_menu())
-                elif d.startswith("league_") or d.startswith("table_") or d.startswith("refresh_table_"):
-                    lid = d.replace("league_", "").replace("table_", "").replace("refresh_table_", "")
-                    answer_cb(cid, "Refreshing Table..."); tbl = get_beautiful_table(lid); edit_msg(chat_id, msg_id, tbl, league_tabs(lid))
-                elif d.startswith("matches_") or d.startswith("refresh_matches_"):
-                    lid = d.replace("matches_", "").replace("refresh_matches_", "")
-                    answer_cb(cid, "Refreshing Matches..."); txt = get_matches(lid); full = f"*{LEAGUE_NAMES.get(lid)} - Matches Today WAT*\n\n" + (txt or "No matches"); kb = {"inline_keyboard": [[{"text": "🔄 Refresh Matches", "callback_data": f"refresh_matches_{lid}"}], [{"text": "📊 Table", "callback_data": f"table_{lid}"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}; edit_msg(chat_id, msg_id, full, kb)
-                elif d == "live" or d == "refresh_live":
-                    answer_cb(cid, "Checking live..."); live_txt = "🔴 *Live Now + Auto Goal Feed ON*\nYou will get notification when they score\n\n"; found = False
+                    answer_cb(cid)
+                    send(chat_id, "⚽ *Football Hub*\nChoose league:", main_menu())
+
+                elif d.startswith("league_") or d.startswith("table_"):
+                    lid = d.replace("league_", "").replace("table_", "")
+                    answer_cb(cid, "Loading Table...")
+                    tbl = get_beautiful_table(lid)
+                    send(chat_id, tbl, league_tabs(lid))
+
+                elif d.startswith("refresh_table_"):
+                    lid = d.replace("refresh_table_", "")
+                    answer_cb(cid, "Refreshing Table...")
+                    tbl = get_beautiful_table(lid)
+                    edit_msg(chat_id, msg_id, tbl, league_tabs(lid))
+
+                elif d.startswith("matches_") and not d.startswith("refresh_matches_"):
+                    lid = d.replace("matches_", "")
+                    answer_cb(cid, "Loading Matches...")
+                    txt = get_matches(lid)
+                    full = f"*{LEAGUE_NAMES.get(lid)} - Matches Today WAT*\n\n" + (txt or "No matches")
+                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Matches", "callback_data": f"refresh_matches_{lid}"}], [{"text": "📊 Table", "callback_data": f"table_{lid}"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
+                    send(chat_id, full, kb)
+
+                elif d.startswith("refresh_matches_"):
+                    lid = d.replace("refresh_matches_", "")
+                    answer_cb(cid, "Refreshing Matches...")
+                    txt = get_matches(lid)
+                    full = f"*{LEAGUE_NAMES.get(lid)} - Matches Today WAT*\n\n" + (txt or "No matches")
+                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Matches", "callback_data": f"refresh_matches_{lid}"}], [{"text": "📊 Table", "callback_data": f"table_{lid}"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
+                    edit_msg(chat_id, msg_id, full, kb)
+
+                elif d == "live":
+                    answer_cb(cid, "Checking live...")
+                    live_txt = "🔴 *Live Now + Auto Goal Feed ON*\nYou will get notification when they score\n\n"
+                    found = False
                     for lid in ["tur.1", "eng.1", "esp.1", "ita.1", "ger.1", "uefa.champions"]:
                         m = get_matches(lid, only_live=True)
                         if m: live_txt += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"; found = True
-                    if not found: live_txt += "😴 No games live RIGHT NOW.\nFeed ON - you will get next goal auto!\n"
-                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Live", "callback_data": "refresh_live"}], [{"text": "📅 Today", "callback_data": "today"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}; edit_msg(chat_id, msg_id, live_txt[:3800], kb)
-                elif d == "today" or d == "refresh_today":
-                    answer_cb(cid, "Loading today..."); full = ""
+                    if not found: live_txt += "😴 No games live RIGHT NOW.\n"
+                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Live", "callback_data": "refresh_live"}], [{"text": "📅 Today", "callback_data": "today"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
+                    send(chat_id, live_txt[:3800], kb)
+
+                elif d == "refresh_live":
+                    answer_cb(cid, "Refreshing Live...")
+                    live_txt = "🔴 *Live Now + Auto Goal Feed ON*\nYou will get notification when they score\n\n"
+                    found = False
+                    for lid in ["tur.1", "eng.1", "esp.1", "ita.1", "ger.1", "uefa.champions"]:
+                        m = get_matches(lid, only_live=True)
+                        if m: live_txt += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"; found = True
+                    if not found: live_txt += "😴 No games live RIGHT NOW.\n"
+                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Live", "callback_data": "refresh_live"}], [{"text": "📅 Today", "callback_data": "today"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
+                    edit_msg(chat_id, msg_id, live_txt[:3800], kb)
+
+                elif d == "today":
+                    answer_cb(cid, "Loading today...")
+                    full = ""
                     for lid in ["tur.1", "eng.1", "esp.1", "ger.1", "ita.1", "uefa.champions"]:
                         m = get_matches(lid)
                         if m: full += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"
                     if not full: full = "No matches today."
-                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Today", "callback_data": "refresh_today"}], [{"text": "🔴 Live Now", "callback_data": "live"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}; edit_msg(chat_id, msg_id, full[:3800], kb)
+                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Today", "callback_data": "refresh_today"}], [{"text": "🔴 Live Now", "callback_data": "live"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
+                    send(chat_id, full[:3800], kb)
+
+                elif d == "refresh_today":
+                    answer_cb(cid, "Refreshing Today...")
+                    full = ""
+                    for lid in ["tur.1", "eng.1", "esp.1", "ger.1", "ita.1", "uefa.champions"]:
+                        m = get_matches(lid)
+                        if m: full += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"
+                    if not full: full = "No matches today."
+                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Today", "callback_data": "refresh_today"}], [{"text": "🔴 Live Now", "callback_data": "live"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
+                    edit_msg(chat_id, msg_id, full[:3800], kb)
+
                 elif d.startswith("stats_"):
-                    _, lid, eid = d.split("_", 2); answer_cb(cid, "Loading Stats..."); edit_msg(chat_id, msg_id, get_stats(eid, lid), {"inline_keyboard": [[{"text": "🔄 Refresh Stats", "callback_data": d}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]})
+                    _, lid, eid = d.split("_", 2)
+                    answer_cb(cid, "Loading Stats...")
+                    send(chat_id, get_stats(eid, lid), {"inline_keyboard": [[{"text": "🔄 Refresh Stats", "callback_data": d}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]})
                 continue
+
             if "message" not in up: continue
             chat_id = str(up["message"]["chat"]["id"]); txt = up["message"].get("text", "").strip(); low = txt.lower()
             if low.startswith("/start") or low == "menu":
                 cur.execute("INSERT OR IGNORE INTO subs VALUES (?)", (chat_id,)); conn.commit()
-                send(chat_id, "⚽ *Football Live V11 FINAL* ✅\n\n✅ Table shows 🟩 4-1 green / 🟥 4-1 red\n✅ Pts shows live: 13→16🟢 when winning\n✅ Each screen has its OWN refresh - edits same message\n✅ Auto goal push ON - you will get notification when they score\n\nChoose league:", main_menu())
+                send(chat_id, "⚽ *Football Live V11.2* ✅\n\nMain menu stays at top.\nNew content appears below.\nRefresh edits only that content.\n\nChoose league:", main_menu())
             elif len(low) >= 3 and not low.startswith("/"):
                 db_add_fav(chat_id, low); send(chat_id, f"⭐ {txt.title()} saved!", main_menu())
         time.sleep(1)
     except Exception as e:
-        print("loop err", e); time.sleep(3) 
+        print("loop err", e); time.sleep(3)

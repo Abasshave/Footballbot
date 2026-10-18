@@ -3,7 +3,7 @@ from threading import Thread
 import os
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Football Bot V12.1 OK - Shows Scorer"
+def home(): return "Football Bot V12.2 OK"
 def run_web():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), use_reloader=False)
 Thread(target=run_web, daemon=True).start()
@@ -16,16 +16,9 @@ TOKEN = os.environ.get("BOT_TOKEN")
 DB = "football.db"
 conn = sqlite3.connect(DB, check_same_thread=False)
 cur = conn.cursor()
-cur.execute("CREATE TABLE IF NOT EXISTS favs (chat_id TEXT, team TEXT)")
 cur.execute("CREATE TABLE IF NOT EXISTS scores (event_id TEXT PRIMARY KEY, home TEXT, away TEXT, h_score INTEGER, a_score INTEGER)")
 cur.execute("CREATE TABLE IF NOT EXISTS subs (chat_id TEXT PRIMARY KEY)")
 conn.commit()
-
-def db_add_fav(c, t):
-    cur.execute("DELETE FROM favs WHERE chat_id=?", (str(c),))
-    cur.execute("INSERT INTO favs VALUES (?,?)", (str(c), t.lower()))
-    cur.execute("INSERT OR IGNORE INTO subs VALUES (?)", (str(c),))
-    conn.commit()
 
 def db_get_all():
     cur.execute("SELECT chat_id FROM subs")
@@ -33,7 +26,7 @@ def db_get_all():
 
 def send(chat_id, text, kb=None):
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        url = "https://api.telegram.org/bot" + TOKEN + "/sendMessage"
         p = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
         if kb:
             p["reply_markup"] = json.dumps(kb)
@@ -49,23 +42,23 @@ def send_photo(chat_id, photo_path, caption="", kb=None):
         with open(photo_path, 'rb') as f:
             file_data = f.read()
         body = b''
-        body += f'--{boundary}\r\n'.encode()
-        body += f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'.encode()
-        body += f'--{boundary}\r\n'.encode()
-        body += f'Content-Disposition: form-data; name="caption"\r\n\r\n{caption}\r\n'.encode()
-        body += f'--{boundary}\r\n'.encode()
-        body += f'Content-Disposition: form-data; name="parse_mode"\r\n\r\nMarkdown\r\n'.encode()
+        body += ("--" + boundary + "\r\n").encode()
+        body += ('Content-Disposition: form-data; name="chat_id"\r\n\r\n' + str(chat_id) + "\r\n").encode()
+        body += ("--" + boundary + "\r\n").encode()
+        body += ('Content-Disposition: form-data; name="caption"\r\n\r\n' + caption + "\r\n").encode()
+        body += ("--" + boundary + "\r\n").encode()
+        body += 'Content-Disposition: form-data; name="parse_mode"\r\n\r\nMarkdown\r\n'.encode()
         if kb:
-            body += f'--{boundary}\r\n'.encode()
-            body += f'Content-Disposition: form-data; name="reply_markup"\r\n\r\n{json.dumps(kb)}\r\n'.encode()
-        body += f'--{boundary}\r\n'.encode()
-        body += f'Content-Disposition: form-data; name="photo"; filename="table.png"\r\nContent-Type: image/png\r\n\r\n'.encode()
+            body += ("--" + boundary + "\r\n").encode()
+            body += ('Content-Disposition: form-data; name="reply_markup"\r\n\r\n' + json.dumps(kb) + "\r\n").encode()
+        body += ("--" + boundary + "\r\n").encode()
+        body += 'Content-Disposition: form-data; name="photo"; filename="table.png"\r\nContent-Type: image/png\r\n\r\n'.encode()
         body += file_data + b'\r\n'
-        body += f'--{boundary}--\r\n'.encode()
+        body += ("--" + boundary + "--\r\n").encode()
         req = urllib.request.Request(
-            f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+            "https://api.telegram.org/bot" + TOKEN + "/sendPhoto",
             data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+            headers={"Content-Type": "multipart/form-data; boundary=" + boundary}
         )
         urllib.request.urlopen(req, timeout=20)
     except Exception as e:
@@ -76,45 +69,34 @@ def edit_photo(chat_id, msg_id, photo_path, caption="", kb=None):
         boundary = uuid.uuid4().hex
         with open(photo_path, 'rb') as f:
             file_data = f.read()
-        media = {
-            "type": "photo",
-            "media": "attach://photo",
-            "caption": caption,
-            "parse_mode": "Markdown"
-        }
+        media = {"type": "photo", "media": "attach://photo", "caption": caption, "parse_mode": "Markdown"}
         body = b''
-        body += f'--{boundary}\r\n'.encode()
-        body += f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'.encode()
-        body += f'--{boundary}\r\n'.encode()
-        body += f'Content-Disposition: form-data; name="message_id"\r\n\r\n{msg_id}\r\n'.encode()
-        body += f'--{boundary}\r\n'.encode()
-        body += f'Content-Disposition: form-data; name="media"\r\n\r\n{json.dumps(media)}\r\n'.encode()
+        body += ("--" + boundary + "\r\n").encode()
+        body += ('Content-Disposition: form-data; name="chat_id"\r\n\r\n' + str(chat_id) + "\r\n").encode()
+        body += ("--" + boundary + "\r\n").encode()
+        body += ('Content-Disposition: form-data; name="message_id"\r\n\r\n' + str(msg_id) + "\r\n").encode()
+        body += ("--" + boundary + "\r\n").encode()
+        body += ('Content-Disposition: form-data; name="media"\r\n\r\n' + json.dumps(media) + "\r\n").encode()
         if kb:
-            body += f'--{boundary}\r\n'.encode()
-            body += f'Content-Disposition: form-data; name="reply_markup"\r\n\r\n{json.dumps(kb)}\r\n'.encode()
-        body += f'--{boundary}\r\n'.encode()
-        body += f'Content-Disposition: form-data; name="photo"; filename="table.png"\r\nContent-Type: image/png\r\n\r\n'.encode()
+            body += ("--" + boundary + "\r\n").encode()
+            body += ('Content-Disposition: form-data; name="reply_markup"\r\n\r\n' + json.dumps(kb) + "\r\n").encode()
+        body += ("--" + boundary + "\r\n").encode()
+        body += 'Content-Disposition: form-data; name="photo"; filename="table.png"\r\nContent-Type: image/png\r\n\r\n'.encode()
         body += file_data + b'\r\n'
-        body += f'--{boundary}--\r\n'.encode()
+        body += ("--" + boundary + "--\r\n").encode()
         req = urllib.request.Request(
-            f"https://api.telegram.org/bot{TOKEN}/editMessageMedia",
+            "https://api.telegram.org/bot" + TOKEN + "/editMessageMedia",
             data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+            headers={"Content-Type": "multipart/form-data; boundary=" + boundary}
         )
         urllib.request.urlopen(req, timeout=20)
-        print("EDIT OK")
     except Exception as e:
         print("edit_photo err", e)
 
 def edit_msg(chat_id, msg_id, text, kb=None):
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/editMessageText"
-        p = {
-            "chat_id": chat_id,
-            "message_id": msg_id,
-            "text": text,
-            "parse_mode": "Markdown"
-        }
+        url = "https://api.telegram.org/bot" + TOKEN + "/editMessageText"
+        p = {"chat_id": chat_id, "message_id": msg_id, "text": text, "parse_mode": "Markdown"}
         if kb:
             p["reply_markup"] = json.dumps(kb)
         data = urllib.parse.urlencode(p).encode()
@@ -125,7 +107,7 @@ def edit_msg(chat_id, msg_id, text, kb=None):
 
 def answer_cb(cid, txt=""):
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery"
+        url = "https://api.telegram.org/bot" + TOKEN + "/answerCallbackQuery"
         p = {"callback_query_id": cid, "text": txt}
         data = urllib.parse.urlencode(p).encode()
         req = urllib.request.Request(url, data=data, headers={"User-Agent": "Mozilla/5.0"})
@@ -152,12 +134,14 @@ LEAGUE_NAMES = {
 
 def get_goal_detail(event_id, lid):
     try:
-        d = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/summary?event={event_id}")
+        url = "https://site.api.espn.com/apis/site/v2/sports/soccer/" + lid + "/summary?event=" + event_id
+        d = fetch_json(url)
         if not d:
             return "", "Goal", ""
         commentary = d.get("commentary", []) or []
         for play in reversed(commentary[-70:]):
-            txt_low = (play.get("text","") + " " + play.get("type",{}).get("text","")).lower()
+            txt = play.get("text","") + " " + play.get("type",{}).get("text","")
+            txt_low = txt.lower()
             scorer = ""
             if play.get("athletesInvolved"):
                 scorer = play["athletesInvolved"][0].get("displayName","")
@@ -187,8 +171,8 @@ def download_logo(url):
 
 def generate_table_image(lid):
     endpoints = [
-        f"https://site.web.api.espn.com/apis/v2/sports/soccer/{lid}/standings",
-        f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/standings"
+        "https://site.web.api.espn.com/apis/v2/sports/soccer/" + lid + "/standings",
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/" + lid + "/standings"
     ]
     entries = None
     for url in endpoints:
@@ -208,7 +192,7 @@ def generate_table_image(lid):
         return None
     live_map = {}
     today = date.today().strftime("%Y%m%d")
-    sd = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today}")
+    sd = fetch_json("https://site.api.espn.com/apis/site/v2/sports/soccer/" + lid + "/scoreboard?dates=" + today)
     if sd:
         for ev in sd.get("events", []):
             if ev["status"]["type"]["state"] == "in":
@@ -218,16 +202,8 @@ def generate_table_image(lid):
                 a = next((t for t in comps if t.get("homeAway") == "away"), comps[1])
                 hs = int(h.get("score", 0) or 0)
                 as_ = int(a.get("score", 0) or 0)
-                live_map[h["team"]["displayName"].lower()] = {
-                    "score": f"{hs}-{as_}",
-                    "pts": 3 if hs>as_ else 1 if hs==as_ else 0,
-                    "gd": hs-as_
-                }
-                live_map[a["team"]["displayName"].lower()] = {
-                    "score": f"{as_}-{hs}",
-                    "pts": 3 if as_>hs else 1 if hs==as_ else 0,
-                    "gd": as_-hs
-                }
+                live_map[h["team"]["displayName"].lower()] = {"score": str(hs) + "-" + str(as_), "pts": 3 if hs>as_ else 1 if hs==as_ else 0, "gd": hs-as_}
+                live_map[a["team"]["displayName"].lower()] = {"score": str(as_) + "-" + str(hs), "pts": 3 if as_>hs else 1 if hs==as_ else 0, "gd": as_-hs}
     W, row_h, header_h = 760, 58, 95
     H = header_h + len(entries)*row_h + 15
     img = Image.new("RGB", (W, H), (18,18,18))
@@ -278,13 +254,13 @@ def generate_table_image(lid):
         draw.text((520, y+18), str(gd_live), fill=(210,210,210))
         draw.text((615, y+18), str(pts_live), fill=(255,255,255))
         y += row_h
-    path = f"/tmp/table_{lid}.png"
+    path = "/tmp/table_" + lid + ".png"
     img.save(path)
     return path
 
 def get_matches(lid, only_live=False):
     today = date.today().strftime("%Y%m%d")
-    d = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today}")
+    d = fetch_json("https://site.api.espn.com/apis/site/v2/sports/soccer/" + lid + "/scoreboard?dates=" + today)
     if not d or not d.get("events"):
         return ""
     out = ""
@@ -300,27 +276,27 @@ def get_matches(lid, only_live=False):
         as_ = a.get('score', '0')
         det = ev["status"]["type"]["detail"]
         if state == "in":
-            out += f"🔴 {h['team']['shortDisplayName']} {hs}-{as_} {a['team']['shortDisplayName']} • {det}\n"
+            out = out + "LIVE " + h['team']['shortDisplayName'] + " " + str(hs) + "-" + str(as_) + " " + a['team']['shortDisplayName'] + " " + det + "\n"
         else:
-            icon = "✅" if state == "post" else "🕒"
-            out += f"{icon} {h['team']['shortDisplayName']} {hs}-{as_} {a['team']['shortDisplayName']} • {det}\n"
+            icon = "FT" if state == "post" else "TODAY"
+            out = out + icon + " " + h['team']['shortDisplayName'] + " " + str(hs) + "-" + str(as_) + " " + a['team']['shortDisplayName'] + " " + det + "\n"
     return out
 
 def main_menu():
     return {
         "inline_keyboard": [
-            [{"text": "🇹🇷 Super Lig", "callback_data": "league_tur.1"}, {"text": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL", "callback_data": "league_eng.1"}],
-            [{"text": "🏆 Champions League", "callback_data": "league_uefa.champions"}, {"text": "🇪🇸 La Liga", "callback_data": "league_esp.1"}],
-            [{"text": "🔴 Live Now", "callback_data": "live"}, {"text": "📅 Today", "callback_data": "today"}]
+            [{"text": "Super Lig", "callback_data": "league_tur.1"}, {"text": "EPL", "callback_data": "league_eng.1"}],
+            [{"text": "Champions League", "callback_data": "league_uefa.champions"}, {"text": "La Liga", "callback_data": "league_esp.1"}],
+            [{"text": "Live Now", "callback_data": "live"}, {"text": "Today", "callback_data": "today"}]
         ]
     }
 
 def league_tabs(lid):
     return {
         "inline_keyboard": [
-            [{"text": "📊 Table", "callback_data": f"table_{lid}"}, {"text": "⚽ Matches", "callback_data": f"matches_{lid}"}],
-            [{"text": "🔄 Refresh Table", "callback_data": f"refresh_table_{lid}"}],
-            [{"text": "⬅️ Main Menu", "callback_data": "menu"}]
+            [{"text": "Table", "callback_data": "table_" + lid}, {"text": "Matches", "callback_data": "matches_" + lid}],
+            [{"text": "Refresh Table", "callback_data": "refresh_table_" + lid}],
+            [{"text": "Main Menu", "callback_data": "menu"}]
         ]
     }
 
@@ -330,7 +306,8 @@ def notifier():
         try:
             today = date.today().strftime("%Y%m%d")
             for lid in ["esp.1", "eng.1", "tur.1", "ita.1", "ger.1", "uefa.champions"]:
-                d = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today}")
+                url = "https://site.api.espn.com/apis/site/v2/sports/soccer/" + lid + "/scoreboard?dates=" + today
+                d = fetch_json(url)
                 if not d:
                     continue
                 for ev in d.get("events", []):
@@ -356,13 +333,13 @@ def notifier():
                             conn.commit()
                             scorer, gtype, club = get_goal_detail(eid, lid)
                             if gtype == "Penalty Missed":
-                                msg = f"❌ Penalty Missed! {h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}\n{minute} {club} - {scorer} missed!"
+                                msg = "Penalty Missed! " + h["team"]["displayName"] + " " + str(hs) + "-" + str(as_) + " " + a["team"]["displayName"] + "\n" + minute + " " + club + " - " + scorer + " missed!"
                             elif gtype == "Penalty":
-                                msg = f"🎯 Penalty Goal! {h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}\n{minute} {club} - {scorer} penalty! {hs}-{as_}"
+                                msg = "Penalty Goal! " + h["team"]["displayName"] + " " + str(hs) + "-" + str(as_) + " " + a["team"]["displayName"] + "\n" + minute + " " + club + " - " + scorer + " penalty " + str(hs) + "-" + str(as_)
                             elif gtype == "Own Goal":
-                                msg = f"😱 Own Goal! {h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}\n{minute} {club} - {scorer} OWN GOAL {hs}-{as_}"
+                                msg = "Own Goal! " + h["team"]["displayName"] + " " + str(hs) + "-" + str(as_) + " " + a["team"]["displayName"] + "\n" + minute + " " + club + " - " + scorer + " OWN GOAL " + str(hs) + "-" + str(as_)
                             else:
-                                msg = f"⚽ Goal! {h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}\n{minute} {club} - {scorer} scored! {hs}-{as_}"
+                                msg = "Goal! " + h["team"]["displayName"] + " " + str(hs) + "-" + str(as_) + " " + a["team"]["displayName"] + "\n" + minute + " " + club + " - " + scorer + " scored " + str(hs) + "-" + str(as_)
                             for chat_id in db_get_all():
                                 send(chat_id, msg)
             time.sleep(10)
@@ -373,10 +350,10 @@ def notifier():
 threading.Thread(target=notifier, daemon=True).start()
 
 offset = 0
-print("V12.1 RUNNING")
+print("V12.2 RUNNING")
 while True:
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={offset}&timeout=30"
+        url = "https://api.telegram.org/bot" + TOKEN + "/getUpdates?offset=" + str(offset) + "&timeout=30"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=35) as r:
             data = json.loads(r.read().decode())
@@ -390,52 +367,56 @@ while True:
                 cid = cb["id"]
                 if d == "menu":
                     answer_cb(cid)
-                    send(chat_id, "⚽ Football Hub\nChoose league:", main_menu())
+                    send(chat_id, "Football Hub - Choose league:", main_menu())
                 elif d.startswith("league_") or d.startswith("table_"):
                     lid = d.replace("league_", "").replace("table_", "")
                     answer_cb(cid, "Generating table...")
                     path = generate_table_image(lid)
                     if path:
-                        cap = f"*{LEAGUE_NAMES.get(lid)} - FULL TABLE*"
+                        cap = LEAGUE_NAMES.get(lid) + " - FULL TABLE"
                         send_photo(chat_id, path, cap, league_tabs(lid))
                 elif d.startswith("refresh_table_"):
                     lid = d.replace("refresh_table_", "")
                     answer_cb(cid, "Refreshing...")
                     path = generate_table_image(lid)
                     if path:
-                        cap = f"*{LEAGUE_NAMES.get(lid)} - FULL TABLE* (Refreshed)"
+                        cap = LEAGUE_NAMES.get(lid) + " - FULL TABLE Refreshed"
                         edit_photo(chat_id, msg_id, path, cap, league_tabs(lid))
                 elif d.startswith("refresh_matches_"):
                     lid = d.replace("refresh_matches_", "")
-                    answer_cb(cid, "Refreshing matches...")
+                    answer_cb(cid, "Refreshing...")
                     txt = get_matches(lid)
-                    full = f"*{LEAGUE_NAMES.get(lid)}*\n\n" + (txt or "No matches")
+                    if txt == "":
+                        txt = "No matches"
+                    full = LEAGUE_NAMES.get(lid) + "\n\n" + txt
                     kb = {
                         "inline_keyboard": [
-                            [{"text": "🔄 Refresh Matches", "callback_data": f"refresh_matches_{lid}"}],
-                            [{"text": "📊 Table", "callback_data": f"table_{lid}"}],
-                            [{"text": "⬅️ Menu", "callback_data": "menu"}]
+                            [{"text": "Refresh Matches", "callback_data": "refresh_matches_" + lid}],
+                            [{"text": "Table", "callback_data": "table_" + lid}],
+                            [{"text": "Menu", "callback_data": "menu"}]
                         ]
                     }
                     edit_msg(chat_id, msg_id, full, kb)
                 elif d.startswith("matches_"):
                     lid = d.replace("matches_", "")
-                    answer_cb(cid, "Loading matches...")
+                    answer_cb(cid, "Loading...")
                     txt = get_matches(lid)
-                    full = f"*{LEAGUE_NAMES.get(lid)}*\n\n" + (txt or "No matches")
+                    if txt == "":
+                        txt = "No matches"
+                    full = LEAGUE_NAMES.get(lid) + "\n\n" + txt
                     kb = {
                         "inline_keyboard": [
-                            [{"text": "🔄 Refresh Matches", "callback_data": f"refresh_matches_{lid}"}],
-                            [{"text": "📊 Table", "callback_data": f"table_{lid}"}],
-                            [{"text": "⬅️ Menu", "callback_data": "menu"}]
+                            [{"text": "Refresh Matches", "callback_data": "refresh_matches_" + lid}],
+                            [{"text": "Table", "callback_data": "table_" + lid}],
+                            [{"text": "Menu", "callback_data": "menu"}]
                         ]
                     }
                     send(chat_id, full, kb)
                 elif d == "live":
                     answer_cb(cid, "Checking live...")
-                    live_txt = "🔴 *Live Now*\n\n"
+                    live_txt = "Live Now\n\n"
                     found = False
                     for lid in ["tur.1", "eng.1", "esp.1", "ita.1", "ger.1", "uefa.champions"]:
                         m = get_matches(lid, only_live=True)
                         if m:
-                            live_txt += f"*
+  

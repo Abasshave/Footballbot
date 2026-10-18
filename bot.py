@@ -339,4 +339,28 @@ while True:
                     kb = {"inline_keyboard": [[{"text": "🔄 Refresh Live", "callback_data": "refresh_live"}], [{"text": "📅 Today", "callback_data": "today"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}; edit_msg(chat_id, msg_id, live_txt[:3800], kb)
                 elif d == "today":
                     answer_cb(cid, "Loading today..."); full=""
-                    fo
+                    for lid in ["tur.1", "eng.1", "esp.1", "ger.1", "ita.1", "uefa.champions"]:
+                        m = get_matches(lid)
+                        if m: full += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"
+                    if not full: full="No matches today."
+                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Today", "callback_data": "refresh_today"}], [{"text": "🔴 Live Now", "callback_data": "live"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}; send(chat_id, full[:3800], kb)
+                elif d == "refresh_today":
+                    answer_cb(cid, "Refreshing Today..."); full=""
+                    for lid in ["tur.1", "eng.1", "esp.1", "ger.1", "ita.1", "uefa.champions"]:
+                        m = get_matches(lid)
+                        if m: full += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"
+                    if not full: full="No matches today."
+                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Today", "callback_data": "refresh_today"}], [{"text": "🔴 Live Now", "callback_data": "live"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}; edit_msg(chat_id, msg_id, full[:3800], kb)
+                elif d.startswith("stats_"):
+                    _, lid, eid = d.split("_", 2); answer_cb(cid, "Loading Stats..."); send(chat_id, get_stats(eid, lid), {"inline_keyboard": [[{"text": "⬅️ Menu", "callback_data": "menu"}]]})
+                continue
+            if "message" not in up: continue
+            chat_id = str(up["message"]["chat"]["id"]); txt = up["message"].get("text", "").strip(); low = txt.lower()
+            if low.startswith("/start") or low == "menu":
+                cur.execute("INSERT OR IGNORE INTO subs VALUES (?)", (chat_id,)); conn.commit()
+                send(chat_id, "⚽ *Football Live V11.7* ✅\nReal logos table image, no fake emoji.\nChoose league:", main_menu())
+            elif len(low) >= 3 and not low.startswith("/"):
+                db_add_fav(chat_id, low); send(chat_id, f"⭐ {txt.title()} saved!", main_menu())
+        time.sleep(1)
+    except Exception as e:
+        print("loop err", e); time.sleep(3)

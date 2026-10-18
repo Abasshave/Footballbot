@@ -3,12 +3,12 @@ from threading import Thread
 import os
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Football Bot V11.2 - Main Menu Fixed"
+def home(): return "Football Bot V11.3 FINAL"
 def run_web():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), use_reloader=False)
 Thread(target=run_web, daemon=True).start()
 
-import urllib.request, urllib.parse, json, time, sqlite3, threading, re
+import urllib.request, urllib.parse, json, time, sqlite3, threading
 from datetime import datetime, date
 
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -48,8 +48,9 @@ def edit_msg(chat_id, msg_id, text, kb=None):
         req = urllib.request.Request(url, data=urllib.parse.urlencode(p).encode(), headers={"User-Agent": "Mozilla/5.0"})
         urllib.request.urlopen(req, timeout=12)
     except Exception as e:
-        print("edit err", e)
-        send(chat_id, text, kb)
+        # FIXED: Don't send new message on refresh fail, just ignore
+        # This was causing new message when you clicked refresh
+        print("edit fail (ignored):", e)
 
 def answer_cb(cid, txt=""):
     try:
@@ -57,23 +58,20 @@ def answer_cb(cid, txt=""):
         p = {"callback_query_id": cid, "text": txt}
         req = urllib.request.Request(url, data=urllib.parse.urlencode(p).encode(), headers={"User-Agent": "Mozilla/5.0"})
         urllib.request.urlopen(req, timeout=5)
-    except:
-        pass
+    except: pass
 
 def fetch_json(url):
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as r:
             return json.loads(r.read().decode())
-    except:
-        return None
+    except: return None
 
 def wat(iso):
     try:
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
         return f"{(dt.hour + 1) % 24:02d}:{dt.minute:02d} WAT"
-    except:
-        return ""
+    except: return ""
 
 LEAGUE_NAMES = {"eng.1": "Premier League 🏴󠁧󠁢󠁥󠁮󠁧󠁿", "tur.1": "Süper Lig 🇹🇷", "esp.1": "La Liga 🇪🇸", "ger.1": "Bundesliga 🇩🇪", "ita.1": "Serie A 🇮🇹", "uefa.champions": "Champions League 🏆"}
 TEAM_LOGOS = {"Galatasaray": "🦁", "Fenerbahce": "💛", "Fenerbahçe": "💛", "Besiktas": "🦅", "Beşiktaş": "🦅", "Kasimpasa": "🔵", "Kasımpaşa": "🔵"}
@@ -81,17 +79,16 @@ TEAM_LOGOS = {"Galatasaray": "🦁", "Fenerbahce": "💛", "Fenerbahçe": "💛"
 def get_last_goal_detail(event_id, lid):
     try:
         d = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/summary?event={event_id}")
-        if not d: return "", "⚽ Goal"
-        for play in reversed((d.get("commentary", []) or [])[-25:]):
-            txt = (play.get("text", "") + " " + play.get("type", {}).get("text", "")).lower()
-            if "goal" in txt:
-                scorer = play.get("athletesInvolved", [{}])[0].get("displayName", "") if play.get("athletesInvolved") else ""
-                if "penalty" in txt: return scorer, "🎯 Penalty"
-                if "own goal" in txt: return scorer, "😱 Own Goal"
-                return scorer, "⚽ Normal Goal"
-        return "", "⚽ Goal"
-    except:
-        return "", "⚽ Goal"
+        if not d: return "", "Goal"
+        for play in reversed((d.get("commentary", []) or [])[-30:]):
+            t = (play.get("text","") + " " + play.get("type",{}).get("text","")).lower()
+            if "goal" in t:
+                scorer = play.get("athletesInvolved", [{}])[0].get("displayName","") if play.get("athletesInvolved") else ""
+                if "penalty" in t: return scorer, "Penalty"
+                if "own goal" in t: return scorer, "Own Goal"
+                return scorer, "Goal"
+        return "", "Goal"
+    except: return "", "Goal"
 
 def get_beautiful_table(lid):
     endpoints = [f"https://site.web.api.espn.com/apis/v2/sports/soccer/{lid}/standings", f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/standings"]
@@ -104,8 +101,7 @@ def get_beautiful_table(lid):
             try: entries = d["children"][0]["standings"]["entries"]
             except: pass
         if entries: break
-    if not entries:
-        return f"*{LEAGUE_NAMES.get(lid, lid)}*\nTable updating... tap 🔄 Refresh"
+    if not entries: return f"*{LEAGUE_NAMES.get(lid, lid)}*\nTable updating... tap Refresh"
 
     live_map = {}
     today = date.today().strftime("%Y%m%d")
@@ -128,8 +124,7 @@ def get_beautiful_table(lid):
                     live_map[a["team"]["displayName"].lower()] = {"score": f"{hs}-{as_}", "res": "draw", "add_pts": 1, "add_gd": 0}
 
     title = LEAGUE_NAMES.get(lid, lid)
-    txt = f"*{title}*\nTürkiye • 2026/2027\n━━━━━━━━━━━━━━━━\n```\n"
-    txt += f"  # Team          Live   P  GD  Pts\n"
+    txt = f"*{title}*\n```\n  # Team          Live   P  GD  Pts\n"
     for i, e in enumerate(entries[:12], 1):
         full = e.get("team", {}).get("displayName", ""); short = e.get("team", {}).get("shortDisplayName", full)[:11]
         logo = TEAM_LOGOS.get(full, "⚽")
@@ -146,7 +141,7 @@ def get_beautiful_table(lid):
             txt += f"{i:2} {logo} {short:<11} {pill:<6} {p:2} {new_gd:3} {pts_str:<7}\n"
         else:
             txt += f"{i:2} {logo} {short:<11} {'':6} {p:2} {gd:3} {pts:3}\n"
-    txt += "```\n🔴=losing 🟩=winning | WAT"
+    txt += "```"
     return txt
 
 def get_matches(lid, only_live=False):
@@ -162,12 +157,12 @@ def get_matches(lid, only_live=False):
         a = next((t for t in teams if t.get("homeAway") == "away"), teams[1])
         hs = h.get('score', '0'); as_ = a.get('score', '0'); det = ev["status"]["type"]["detail"]
         if state == "in":
-            if int(hs or 0) > int(as_ or 0): out += f"🔴 {h['team']['shortDisplayName']} 🟩 {hs}-{as_} {a['team']['shortDisplayName']} • {det} • {wat(ev['date'])}\n"
-            elif int(as_ or 0) > int(hs or 0): out += f"🔴 {a['team']['shortDisplayName']} 🟩 {as_}-{hs} {h['team']['shortDisplayName']} • {det} • {wat(ev['date'])}\n"
-            else: out += f"🔴 {h['team']['shortDisplayName']} 🟨 {hs}-{as_} {a['team']['shortDisplayName']} • {det} • {wat(ev['date'])}\n"
+            if int(hs or 0) > int(as_ or 0): out += f"🔴 {h['team']['shortDisplayName']} 🟩 {hs}-{as_} {a['team']['shortDisplayName']} • {det}\n"
+            elif int(as_ or 0) > int(hs or 0): out += f"🔴 {a['team']['shortDisplayName']} 🟩 {as_}-{hs} {h['team']['shortDisplayName']} • {det}\n"
+            else: out += f"🔴 {h['team']['shortDisplayName']} 🟨 {hs}-{as_} {a['team']['shortDisplayName']} • {det}\n"
         else:
             icon = "✅" if state == "post" else "🕒"
-            out += f"{icon} {h['team']['shortDisplayName']} {hs}-{as_} {a['team']['shortDisplayName']} • {det} • {wat(ev['date'])}\n"
+            out += f"{icon} {h['team']['shortDisplayName']} {hs}-{as_} {a['team']['shortDisplayName']} • {det}\n"
     return out
 
 def get_stats(event_id, lid):
@@ -183,8 +178,7 @@ def get_stats(event_id, lid):
             for s in tm.get("statistics", [])[:6]: txt += f"{s['name']}: {s['displayValue']}\n"
             txt += "\n"
         return txt[:3500]
-    except:
-        return "Stats loading..."
+    except: return "Stats loading..."
 
 def main_menu():
     return {"inline_keyboard": [
@@ -201,7 +195,7 @@ def league_tabs(lid):
     ]}
 
 def notifier():
-    print("🔴 Notifier V11.2 ON")
+    print("🔴 Notifier ON")
     while True:
         try:
             today = date.today().strftime("%Y%m%d")
@@ -223,13 +217,14 @@ def notifier():
                         if hs != oh or as_ != oa:
                             cur.execute("UPDATE scores SET h_score=?,a_score=? WHERE event_id=?", (hs, as_, eid)); conn.commit()
                             scorer, gtype = get_last_goal_detail(eid, lid)
-                            if "Penalty" in gtype: msg = f"🎯 *{h['team']['displayName']} - {a['team']['displayName']}*\n{minute} {scorer} — Penalty!\nNew score *{hs}-{as_}*"
-                            elif "Own Goal" in gtype: msg = f"😱 *{h['team']['displayName']} - {a['team']['displayName']}*\n{minute} {scorer} — Own Goal!\nNew score *{hs}-{as_}*"
+                            if gtype == "Penalty":
+                                msg = f"🎯 *Penalty!* {h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}\n{minute} {scorer}\n*New score {hs}-{as_}*"
+                            elif gtype == "Own Goal":
+                                msg = f"😱 *Own Goal!* {h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}\n{minute} {scorer}\n*New score {hs}-{as_}*"
                             else:
-                                if scorer: msg = f"⚽ *{h['team']['displayName']} - {a['team']['displayName']}*\n{minute} {scorer} — {gtype}\nNew score *{hs}-{as_}*"
-                                else: msg = f"⚽ *{h['team']['displayName']} - {a['team']['displayName']}*\n{minute} {gtype}\nNew score *{hs}-{as_}*"
-                            kb = {"inline_keyboard": [[{"text": "Match Stats", "callback_data": f"stats_{lid}_{eid}"}], [{"text": "🔄 Refresh Live", "callback_data": "refresh_live"}]]}
-                            for chat_id in db_get_all(): send(chat_id, msg, kb)
+                                if scorer: msg = f"⚽ *Goal!* {h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}\n{minute} {scorer}\n*New score {hs}-{as_}*"
+                                else: msg = f"⚽ *Goal!* {h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}\n{minute}\n*New score {hs}-{as_}*"
+                            for chat_id in db_get_all(): send(chat_id, msg)
             time.sleep(12)
         except Exception as e:
             print("notifier err", e); time.sleep(12)
@@ -237,7 +232,7 @@ def notifier():
 threading.Thread(target=notifier, daemon=True).start()
 
 offset = 0
-print("✅ V11.2 RUNNING - Main Menu Stays")
+print("✅ V11.3 RUNNING - Fixed edit")
 while True:
     try:
         req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={offset}&timeout=30", headers={"User-Agent": "Mozilla/5.0"})
@@ -246,61 +241,53 @@ while True:
             offset = up["update_id"] + 1
             if "callback_query" in up:
                 cb = up["callback_query"]; chat_id = cb["message"]["chat"]["id"]; msg_id = cb["message"]["message_id"]; d = cb["data"]; cid = cb["id"]
-                
                 if d == "menu":
                     answer_cb(cid)
                     send(chat_id, "⚽ *Football Hub*\nChoose league:", main_menu())
-
                 elif d.startswith("league_") or d.startswith("table_"):
                     lid = d.replace("league_", "").replace("table_", "")
                     answer_cb(cid, "Loading Table...")
                     tbl = get_beautiful_table(lid)
                     send(chat_id, tbl, league_tabs(lid))
-
                 elif d.startswith("refresh_table_"):
                     lid = d.replace("refresh_table_", "")
                     answer_cb(cid, "Refreshing Table...")
                     tbl = get_beautiful_table(lid)
                     edit_msg(chat_id, msg_id, tbl, league_tabs(lid))
-
                 elif d.startswith("matches_") and not d.startswith("refresh_matches_"):
                     lid = d.replace("matches_", "")
                     answer_cb(cid, "Loading Matches...")
                     txt = get_matches(lid)
-                    full = f"*{LEAGUE_NAMES.get(lid)} - Matches Today WAT*\n\n" + (txt or "No matches")
+                    full = f"*{LEAGUE_NAMES.get(lid)} - Matches Today*\n\n" + (txt or "No matches")
                     kb = {"inline_keyboard": [[{"text": "🔄 Refresh Matches", "callback_data": f"refresh_matches_{lid}"}], [{"text": "📊 Table", "callback_data": f"table_{lid}"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
                     send(chat_id, full, kb)
-
                 elif d.startswith("refresh_matches_"):
                     lid = d.replace("refresh_matches_", "")
                     answer_cb(cid, "Refreshing Matches...")
                     txt = get_matches(lid)
-                    full = f"*{LEAGUE_NAMES.get(lid)} - Matches Today WAT*\n\n" + (txt or "No matches")
+                    full = f"*{LEAGUE_NAMES.get(lid)} - Matches Today*\n\n" + (txt or "No matches")
                     kb = {"inline_keyboard": [[{"text": "🔄 Refresh Matches", "callback_data": f"refresh_matches_{lid}"}], [{"text": "📊 Table", "callback_data": f"table_{lid}"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
                     edit_msg(chat_id, msg_id, full, kb)
-
                 elif d == "live":
                     answer_cb(cid, "Checking live...")
-                    live_txt = "🔴 *Live Now + Auto Goal Feed ON*\nYou will get notification when they score\n\n"
+                    live_txt = "🔴 *Live Now*\n\n"
                     found = False
                     for lid in ["tur.1", "eng.1", "esp.1", "ita.1", "ger.1", "uefa.champions"]:
                         m = get_matches(lid, only_live=True)
                         if m: live_txt += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"; found = True
-                    if not found: live_txt += "😴 No games live RIGHT NOW.\n"
+                    if not found: live_txt += "No live games.\n"
                     kb = {"inline_keyboard": [[{"text": "🔄 Refresh Live", "callback_data": "refresh_live"}], [{"text": "📅 Today", "callback_data": "today"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
                     send(chat_id, live_txt[:3800], kb)
-
                 elif d == "refresh_live":
                     answer_cb(cid, "Refreshing Live...")
-                    live_txt = "🔴 *Live Now + Auto Goal Feed ON*\nYou will get notification when they score\n\n"
+                    live_txt = "🔴 *Live Now*\n\n"
                     found = False
                     for lid in ["tur.1", "eng.1", "esp.1", "ita.1", "ger.1", "uefa.champions"]:
                         m = get_matches(lid, only_live=True)
                         if m: live_txt += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"; found = True
-                    if not found: live_txt += "😴 No games live RIGHT NOW.\n"
+                    if not found: live_txt += "No live games.\n"
                     kb = {"inline_keyboard": [[{"text": "🔄 Refresh Live", "callback_data": "refresh_live"}], [{"text": "📅 Today", "callback_data": "today"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
                     edit_msg(chat_id, msg_id, live_txt[:3800], kb)
-
                 elif d == "today":
                     answer_cb(cid, "Loading today...")
                     full = ""
@@ -310,7 +297,6 @@ while True:
                     if not full: full = "No matches today."
                     kb = {"inline_keyboard": [[{"text": "🔄 Refresh Today", "callback_data": "refresh_today"}], [{"text": "🔴 Live Now", "callback_data": "live"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
                     send(chat_id, full[:3800], kb)
-
                 elif d == "refresh_today":
                     answer_cb(cid, "Refreshing Today...")
                     full = ""
@@ -320,18 +306,16 @@ while True:
                     if not full: full = "No matches today."
                     kb = {"inline_keyboard": [[{"text": "🔄 Refresh Today", "callback_data": "refresh_today"}], [{"text": "🔴 Live Now", "callback_data": "live"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}
                     edit_msg(chat_id, msg_id, full[:3800], kb)
-
                 elif d.startswith("stats_"):
                     _, lid, eid = d.split("_", 2)
                     answer_cb(cid, "Loading Stats...")
-                    send(chat_id, get_stats(eid, lid), {"inline_keyboard": [[{"text": "🔄 Refresh Stats", "callback_data": d}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]})
+                    send(chat_id, get_stats(eid, lid), {"inline_keyboard": [[{"text": "⬅️ Menu", "callback_data": "menu"}]]})
                 continue
-
             if "message" not in up: continue
             chat_id = str(up["message"]["chat"]["id"]); txt = up["message"].get("text", "").strip(); low = txt.lower()
             if low.startswith("/start") or low == "menu":
                 cur.execute("INSERT OR IGNORE INTO subs VALUES (?)", (chat_id,)); conn.commit()
-                send(chat_id, "⚽ *Football Live V11.2* ✅\n\nMain menu stays at top.\nNew content appears below.\nRefresh edits only that content.\n\nChoose league:", main_menu())
+                send(chat_id, "⚽ *Football Live V11.3* ✅\nMain menu stays. Content below. Refresh edits same message.\nChoose league:", main_menu())
             elif len(low) >= 3 and not low.startswith("/"):
                 db_add_fav(chat_id, low); send(chat_id, f"⭐ {txt.title()} saved!", main_menu())
         time.sleep(1)

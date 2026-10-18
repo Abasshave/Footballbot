@@ -3,12 +3,12 @@ from threading import Thread
 import os
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Football Bot V11.6 REAL LOGOS"
+def home(): return "Football Bot V11.7 REAL LOGOS NO REQUESTS"
 def run_web():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), use_reloader=False)
 Thread(target=run_web, daemon=True).start()
 
-import urllib.request, urllib.parse, json, time, sqlite3, threading, io
+import urllib.request, urllib.parse, json, time, sqlite3, threading, io, uuid, mimetypes
 from datetime import datetime, date
 from PIL import Image, ImageDraw, ImageFont
 
@@ -41,34 +41,25 @@ def send(chat_id, text, kb=None):
 
 def send_photo(chat_id, photo_path, caption="", kb=None):
     try:
-        import requests
-        url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
-        with open(photo_path, 'rb') as f:
-            files = {'photo': f}
-            data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
-            if kb: data['reply_markup'] = json.dumps(kb)
-            requests.post(url, data=data, files=files, timeout=15)
-    except:
-        # fallback urllib
-        try:
-            import http.client, mimetypes, uuid
-            boundary = uuid.uuid4().hex
-            with open(photo_path, 'rb') as f: file_data = f.read()
-            body = b''
+        boundary = uuid.uuid4().hex
+        with open(photo_path, 'rb') as f: file_data = f.read()
+        body = b''
+        body += f'--{boundary}\r\n'.encode()
+        body += f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'.encode()
+        body += f'--{boundary}\r\n'.encode()
+        body += f'Content-Disposition: form-data; name="caption"\r\n\r\n{caption}\r\n'.encode()
+        body += f'--{boundary}\r\n'.encode()
+        body += f'Content-Disposition: form-data; name="parse_mode"\r\n\r\nMarkdown\r\n'.encode()
+        if kb:
             body += f'--{boundary}\r\n'.encode()
-            body += f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'.encode()
-            body += f'--{boundary}\r\n'.encode()
-            body += f'Content-Disposition: form-data; name="caption"\r\n\r\n{caption}\r\n'.encode()
-            if kb:
-                body += f'--{boundary}\r\n'.encode()
-                body += f'Content-Disposition: form-data; name="reply_markup"\r\n\r\n{json.dumps(kb)}\r\n'.encode()
-            body += f'--{boundary}\r\n'.encode()
-            body += f'Content-Disposition: form-data; name="photo"; filename="table.png"\r\nContent-Type: image/png\r\n\r\n'.encode()
-            body += file_data + b'\r\n'
-            body += f'--{boundary}--\r\n'.encode()
-            req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendPhoto", data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "Mozilla/5.0"})
-            urllib.request.urlopen(req, timeout=15)
-        except Exception as e: print("send_photo err", e)
+            body += f'Content-Disposition: form-data; name="reply_markup"\r\n\r\n{json.dumps(kb)}\r\n'.encode()
+        body += f'--{boundary}\r\n'.encode()
+        body += f'Content-Disposition: form-data; name="photo"; filename="table.png"\r\nContent-Type: image/png\r\n\r\n'.encode()
+        body += file_data + b'\r\n'
+        body += f'--{boundary}--\r\n'.encode()
+        req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendPhoto", data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "Mozilla/5.0"})
+        urllib.request.urlopen(req, timeout=20)
+    except Exception as e: print("send_photo err", e)
 
 def edit_msg(chat_id, msg_id, text, kb=None):
     try:
@@ -100,7 +91,7 @@ def wat(iso):
         return f"{(dt.hour + 1) % 24:02d}:{dt.minute:02d} WAT"
     except: return ""
 
-LEAGUE_NAMES = {"eng.1": "Premier League 🏴󠁧󠁢󠁥󠁮󠁧󠁿", "tur.1": "Süper Lig 🇹🇷", "esp.1": "La Liga 🇪🇸", "ger.1": "Bundesliga 🇩🇪", "ita.1": "Serie A 🇮🇹", "uefa.champions": "Champions League 🏆"}
+LEAGUE_NAMES = {"eng.1": "Premier League", "tur.1": "Süper Lig Türkiye", "esp.1": "La Liga", "ger.1": "Bundesliga", "ita.1": "Serie A", "uefa.champions": "Champions League"}
 
 def get_goal_detail(event_id, lid):
     try:
@@ -152,27 +143,23 @@ def generate_table_image(lid):
                 h = next((t for t in comps if t.get("homeAway") == "home"), comps[0])
                 a = next((t for t in comps if t.get("homeAway") == "away"), comps[1])
                 hs = int(h.get("score", 0) or 0); as_ = int(a.get("score", 0) or 0)
-                live_map[h["team"]["displayName"].lower()] = {"score": f"{hs}-{as_}", "pts": 3 if hs>as_ else 1 if hs==as_ else 0, "gd": hs-as_, "live": True}
-                live_map[a["team"]["displayName"].lower()] = {"score": f"{as_}-{hs}", "pts": 3 if as_>hs else 1 if hs==as_ else 0, "gd": as_-hs, "live": True}
+                live_map[h["team"]["displayName"].lower()] = {"score": f"{hs}-{as_}", "pts": 3 if hs>as_ else 1 if hs==as_ else 0, "gd": hs-as_}
+                live_map[a["team"]["displayName"].lower()] = {"score": f"{as_}-{hs}", "pts": 3 if as_>hs else 1 if hs==as_ else 0, "gd": as_-hs}
 
     W, row_h, header_h = 720, 56, 90
     H = header_h + len(entries)*row_h + 20
     img = Image.new("RGB", (W, H), (18,18,18))
     draw = ImageDraw.Draw(img)
-    try: font_bold = ImageFont.truetype("arial.ttf", 22)
-    except: font_bold = ImageFont.load_default()
-    try: font = ImageFont.truetype("arial.ttf", 20)
-    except: font = ImageFont.load_default()
-    try: font_small = ImageFont.truetype("arial.ttf", 16)
-    except: font_small = ImageFont.load_default()
+    font_bold = ImageFont.load_default()
+    font = ImageFont.load_default()
+    font_small = ImageFont.load_default()
 
-    # header
     draw.rectangle([0,0,W,header_h], fill=(30,30,30))
     draw.text((20,15), LEAGUE_NAMES.get(lid,lid), font=font_bold, fill=(255,255,255))
-    draw.text((20,48), "Live", font=font, fill=(255,70,70))
-    draw.text((420,48), "P", font=font, fill=(180,180,180))
-    draw.text((490,48), "GD", font=font, fill=(180,180,180))
-    draw.text((580,48), "Pts", font=font_bold, fill=(255,255,255))
+    draw.text((20,48), "Live", fill=(255,70,70))
+    draw.text((420,48), "P", fill=(180,180,180))
+    draw.text((490,48), "GD", fill=(180,180,180))
+    draw.text((580,48), "Pts", fill=(255,255,255))
 
     y = header_h
     for i, e in enumerate(entries, 1):
@@ -180,46 +167,30 @@ def generate_table_image(lid):
         full = team.get("displayName","")
         short = team.get("shortDisplayName", full)[:18]
         logo_url = team.get("logos", [{}])[0].get("href") if team.get("logos") else None
-        if not logo_url: logo_url = e.get("team",{}).get("logos",[{}])[0].get("href") if e.get("team",{}).get("logos") else None
 
         stats = {s['name']: s.get('value', 0) for s in e.get("stats", [])}
         p = int(stats.get("gamesPlayed", 0) or stats.get("wins", 0) + stats.get("ties", 0) + stats.get("losses", 0))
         gd = int(stats.get("pointDifferential", 0)); pts = int(stats.get("points", 0))
         lm = live_map.get(full.lower())
-        if lm:
-            pts_live = pts + lm['pts']
-            gd_live = gd + lm['gd']
-            live_txt = lm['score']
-        else:
-            pts_live = pts; gd_live = gd; live_txt = ""
+        pts_live = pts + lm['pts'] if lm else pts
+        gd_live = gd + lm['gd'] if lm else gd
+        live_txt = lm['score'] if lm else ""
 
-        # row bg
         bg = (28,28,35) if i%2==0 else (22,22,28)
-        if lm: bg = (45,35,35)  # live highlight
+        if lm: bg = (45,35,35)
         draw.rectangle([0,y,W,y+row_h], fill=bg)
-
-        # position
-        draw.text((20, y+16), str(i), font=font, fill=(200,200,200))
-
-        # logo
+        draw.text((20, y+16), str(i), fill=(200,200,200))
         if logo_url:
             logo_img = download_logo(logo_url)
             if logo_img:
                 img.paste(logo_img, (60, y+7), logo_img)
-
-        # name
-        draw.text((115, y+16), short, font=font, fill=(255,255,255))
-
-        # live score box like screenshot
+        draw.text((115, y+16), short, fill=(255,255,255))
         if lm:
             draw.rounded_rectangle([300, y+10, 380, y+42], radius=6, fill=(220,50,50))
-            draw.text((312, y+14), live_txt, font=font_small, fill=(255,255,255))
-
-        # P GD Pts
-        draw.text((425, y+16), str(p), font=font, fill=(220,220,220))
-        draw.text((490, y+16), str(gd_live), font=font, fill=(220,220,220))
-        draw.text((590, y+16), str(pts_live), font=font_bold, fill=(255,255,255))
-
+            draw.text((312, y+14), live_txt, fill=(255,255,255))
+        draw.text((425, y+16), str(p), fill=(220,220,220))
+        draw.text((490, y+16), str(gd_live), fill=(220,220,220))
+        draw.text((590, y+16), str(pts_live), fill=(255,255,255))
         y += row_h
 
     path = f"/tmp/table_{lid}.png"
@@ -289,7 +260,7 @@ def league_tabs(lid):
     ]}
 
 def notifier():
-    print("🔴 Notifier V11.6 REAL LOGO ON")
+    print("🔴 Notifier V11.7 ON")
     while True:
         try:
             today = date.today().strftime("%Y%m%d")
@@ -327,7 +298,7 @@ def notifier():
 threading.Thread(target=notifier, daemon=True).start()
 
 offset = 0
-print("✅ V11.6 RUNNING - REAL LOGO IMAGE TABLE")
+print("✅ V11.7 RUNNING - NO REQUESTS NEEDED")
 while True:
     try:
         req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={offset}&timeout=30", headers={"User-Agent": "Mozilla/5.0"})
@@ -348,7 +319,6 @@ while True:
                     lid = d.replace("refresh_table_", ""); answer_cb(cid, "Refreshing table image...")
                     path = generate_table_image(lid)
                     if path: send_photo(chat_id, path, f"*{LEAGUE_NAMES.get(lid)} - FULL TABLE* (Refreshed)", league_tabs(lid))
-                    else: send(chat_id, "Table updating...", league_tabs(lid))
                 elif d.startswith("matches_") and not d.startswith("refresh_matches_"):
                     lid = d.replace("matches_", ""); answer_cb(cid, "Loading Matches..."); txt = get_matches(lid); full = f"*{LEAGUE_NAMES.get(lid)} - Today*\n\n" + (txt or "No matches"); kb = {"inline_keyboard": [[{"text": "🔄 Refresh Matches", "callback_data": f"refresh_matches_{lid}"}], [{"text": "📊 Table", "callback_data": f"table_{lid}"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}; send(chat_id, full, kb)
                 elif d.startswith("refresh_matches_"):
@@ -357,4 +327,16 @@ while True:
                     answer_cb(cid, "Checking live..."); live_txt = "🔴 *Live Now*\n\n"; found=False
                     for lid in ["tur.1", "eng.1", "esp.1", "ita.1", "ger.1", "uefa.champions"]:
                         m = get_matches(lid, only_live=True)
-                        if m: live_txt += f"*{LEAGUE_NAM
+                        if m: live_txt += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"; found=True
+                    if not found: live_txt += "No live games.\n"
+                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Live", "callback_data": "refresh_live"}], [{"text": "📅 Today", "callback_data": "today"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}; send(chat_id, live_txt[:3800], kb)
+                elif d == "refresh_live":
+                    answer_cb(cid, "Refreshing Live..."); live_txt = "🔴 *Live Now*\n\n"; found=False
+                    for lid in ["tur.1", "eng.1", "esp.1", "ita.1", "ger.1", "uefa.champions"]:
+                        m = get_matches(lid, only_live=True)
+                        if m: live_txt += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"; found=True
+                    if not found: live_txt += "No live games.\n"
+                    kb = {"inline_keyboard": [[{"text": "🔄 Refresh Live", "callback_data": "refresh_live"}], [{"text": "📅 Today", "callback_data": "today"}], [{"text": "⬅️ Menu", "callback_data": "menu"}]]}; edit_msg(chat_id, msg_id, live_txt[:3800], kb)
+                elif d == "today":
+                    answer_cb(cid, "Loading today..."); full=""
+                    fo

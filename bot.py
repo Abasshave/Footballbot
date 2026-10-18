@@ -32,7 +32,8 @@ def run_fake_server():
 
 threading.Thread(target=run_fake_server, daemon=True).start()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8995140935:AAHBISZnroMD6LWXou4cBBSE6B_4TRLzqtw")
+import os
+TOKEN = os.environ.get("BOT_TOKEN")
 DB = "football.db"
 
 # --- DB ---

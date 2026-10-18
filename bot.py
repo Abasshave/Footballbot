@@ -3,25 +3,20 @@ from threading import Thread
 import os
 
 app = Flask(__name__)
-
 @app.route('/')
 def home():
     return "Football Bot is Live!"
-
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
-
 Thread(target=run_web, daemon=True).start()
 
 import urllib.request, urllib.parse, json, time, sqlite3, threading
 from datetime import datetime, date
 
-import os
 TOKEN = os.environ.get("BOT_TOKEN")
 DB = "football.db"
 
-# --- DB ---
 conn = sqlite3.connect(DB, check_same_thread=False)
 cur = conn.cursor()
 cur.execute("CREATE TABLE IF NOT EXISTS favs (chat_id TEXT, team TEXT)")
@@ -32,7 +27,6 @@ def db_add_fav(chat_id, team):
     cur.execute("DELETE FROM favs WHERE chat_id=?", (chat_id,))
     cur.execute("INSERT INTO favs VALUES (?,?)", (chat_id, team.lower()))
     conn.commit()
-
 def db_get_favs():
     cur.execute("SELECT chat_id, team FROM favs")
     return cur.fetchall()
@@ -64,62 +58,114 @@ def wat(iso):
     except:
         return ""
 
-REAL = {
-    "eng.1": "🏆 *PREMIER LEAGUE 26/27*\n\n🥇 *Man City* - 18 pts (6-0-0) GD +11\n🥈 *Arsenal* - 15 pts (5-0-1) GD +5\n🥉 *Brighton* - 13 pts (4-1-1) GD +13\n4. Brentford - 10 pts\n5. Everton - 10 pts\n6. Chelsea - 10 pts\n7. Leeds - 9 pts\n8. Hull City - 9 pts",
-    "esp.1": "🏆 *LA LIGA 26/27*\n\n🥇 *Barcelona* - 24 pts (8-0-0) GD +27 🔥\n🥈 *Atletico Madrid* - 19 pts\n🥉 *Real Betis* - 19 pts\n4. Real Madrid - 18 pts\n5. Sevilla - 14 pts",
-    "ita.1": "🏆 *SERIE A 26/27*\n\n🥇 *Inter* - 16 pts (5-1-0) GD +10\n🥈 *Lazio* - 16 pts GD +7\n🥉 *Roma* - 14 pts GD +11\n4. Frosinone - 13 pts",
-    "ger.1": "🏆 *BUNDESLIGA 26/27*\n\n🥇 *Freiburg* - 13 pts (4-1-0) GD +10\n🥈 *Dortmund* - 13 pts GD +7\n🥉 *Bayern Munich* - 11 pts GD +12\n4. Leverkusen - 10 pts",
-    "tur.1": "🏆 *SÜPER LIG 26/27*\n\n🥇 *Galatasaray* - 16 pts (5-1-1) GD +5\n🥈 *Besiktas* - 15 pts GD +8\n🥉 *Amed SFK* - 14 pts\n4. Fenerbahce - 13 pts GD +13",
-    "fifa.world": "🏆 *WORLD CUP 2026 - FINAL*\n\n🥇 *Spain 1-0 Argentina* (AET) - Ferran Torres 106'\n🥈 Argentina\n🥉 England 6-4 France (3rd)\n📍 MetLife Stadium, NY\n📅 July 19, 2026 - Spain 2nd title",
-    "uefa.champions": "🏆 *CHAMPIONS LEAGUE 26/27*\n\nLeague phase - Matchday 3\nTop 8 qualify to R16\nTap Today to see today's UCL games"
-}
+# --- REAL TABLE FROM ESPN ---
+def get_table(lid):
+    try:
+        # ESPN standings API
+        url = f"https://site.api.espn.com/apis/v2/sports/soccer/{lid}/standings"
+        with urllib.request.urlopen(url, timeout=10) as r:
+            d = json.loads(r.read().decode())
+        standings = d.get("children", [{}])[0].get("standings", {}).get("entries", [])
+        txt = f"🏆 *{lid.upper()} TABLE - LIVE*\n\n"
+        for i, e in enumerate(standings[:10], 1):
+            team = e['team']['displayName']
+            stats = {s['name']: s['value'] for s in e.get('stats', [])}
+            pts = stats.get('points', 0)
+            gp = stats.get('gamesPlayed', 0)
+            gd = stats.get('pointDifferential', 0)
+            icon = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else f"{i}."
+            txt += f"{icon} {team} - {pts} pts ({gp} GP) GD {gd:+}\n"
+        return txt
+    except Exception as ex:
+        print("table err", ex)
+        return "⚠️ Table not available now, try again."
+
+# --- MATCH DETAIL (stats, lineup, H2H) ---
+def get_match_detail(event_id, lid):
+    try:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/summary?event={event_id}"
+        with urllib.request.urlopen(url, timeout=10) as r:
+            d = json.loads(r.read().decode())
+        header = d.get("header", {})
+        comp = header.get("competitions", [{}])[0]
+        competitors = comp.get("competitors", [])
+        if len(competitors)<2: return "No data"
+        h = next((c for c in competitors if c['homeAway']=='home'), competitors[0])
+        a = next((c for c in competitors if c['homeAway']=='away'), competitors[1])
+        status = header.get("competitions", [{}])[0].get("status",{}).get("type",{}).get("detail","")
+        
+        txt = f"⚽ *{h['team']['displayName']} {h.get('score','0')} - {a.get('score','0')} {a['team']['displayName']}*\n📍 {status} | 🕒 {wat(header.get('competitions',[{}])[0].get('date',''))}\n\n"
+        
+        # Stats
+        txt += "📊 *LIVE STATS:*\n"
+        stats = comp.get("statistics", [])
+        if not stats:
+            # try boxscore stats
+            box = d.get("boxscore",{}).get("teams",[])
+            for tm in box:
+                txt += f"\n*{tm.get('team',{}).get('displayName','')}*\n"
+                for st in tm.get("statistics", [])[:8]:
+                    txt += f"{st['displayName']}: {st['displayValue']}\n"
+        else:
+            for s in stats[:10]:
+                txt += f"{s.get('displayName')}: {s.get('displayValue')}\n"
+        
+        # Lineups
+        rosters = d.get("rosters", [])
+        if rosters:
+            txt += "\n👥 *LINEUPS:*\n"
+            for ros in rosters[:2]:
+                team = ros.get("team",{}).get("displayName","")
+                txt += f"\n*{team}:*\n"
+                for pl in ros.get("roster", [])[:11]:
+                    ath = pl.get("athlete",{}).get("displayName","")
+                    pos = pl.get("position",{}).get("abbreviation","")
+                    txt += f"{pos} {ath}\n"
+        
+        # H2H / recent form could be in header
+        return txt if len(txt)<3500 else txt[:3500]
+    except Exception as e:
+        print("detail err", e)
+        return "⚠️ Detail not available."
 
 def menu_kb():
     return {"inline_keyboard": [
         [{"text":"🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL","callback_data":"table_eng.1"}, {"text":"🇪🇸 La Liga","callback_data":"table_esp.1"}],
         [{"text":"🇮🇹 Serie A","callback_data":"table_ita.1"}, {"text":"🇩🇪 Bundesliga","callback_data":"table_ger.1"}],
-        [{"text":"🇹🇷 Süper Lig","callback_data":"table_tur.1"}, {"text":"🌍 World Cup","callback_data":"table_fifa.world"}],
+        [{"text":"🇹🇷 Süper Lig","callback_data":"table_tur.1"}, {"text":"🇫🇷 Ligue 1","callback_data":"table_fra.1"}],
         [{"text":"🏆 UCL","callback_data":"table_uefa.champions"}, {"text":"📅 Today WAT","callback_data":"today"}],
         [{"text":"🔴 Live Now","callback_data":"live"}, {"text":"⭐ My Team","callback_data":"myteam"}],
     ]}
 
 def back_kb(): return {"inline_keyboard": [[{"text":"⬅️ Back to Menu","callback_data":"menu"}]]}
 
-def get_today():
+def get_today_buttons():
     today_str = date.today().strftime("%Y%m%d")
     games = []
+    buttons = []
     for lid in ["eng.1","esp.1","ita.1","ger.1","tur.1","uefa.champions","fra.1"]:
         try:
             url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today_str}"
             with urllib.request.urlopen(url, timeout=10) as r:
                 d = json.loads(r.read().decode())
-            events = d.get("events", [])
-            if not events:
-                url2 = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard"
-                with urllib.request.urlopen(url2, timeout=10) as r2:
-                    d2 = json.loads(r2.read().decode())
-                events = d2.get("events", [])[:3]
-            for ev in events[:5]:
+            for ev in d.get("events", [])[:5]:
                 comp = ev.get("competitions", [{}])[0]
                 teams = comp.get("competitors", [])
                 if len(teams) < 2: continue
                 h = next((t for t in teams if t.get("homeAway")=="home"), teams[0])
                 a = next((t for t in teams if t.get("homeAway")=="away"), teams[1])
                 state = ev.get("status",{}).get("type",{}).get("state","")
-                detail = ev.get("status",{}).get("type",{}).get("detail","")
-                t = wat(ev.get("date",""))
-                if state == "in":
-                    games.append(f"🔴 *{h['team']['displayName']} {h.get('score','0')}-{a.get('score','0')} {a['team']['displayName']}* | {detail}")
-                elif state == "post":
-                    games.append(f"✅ {h['team']['displayName']} {h.get('score','0')}-{a.get('score','0')} {a['team']['displayName']} | FT - {t}")
-                else:
-                    games.append(f"⚽ {h['team']['displayName']} vs {a['team']['displayName']} - 🕒 {t} | {detail if detail else lid}")
+                eid = ev.get("id")
+                icon = "🔴" if state=="in" else "✅" if state=="post" else "⚽"
+                games.append(f"{icon} {h['team']['displayName']} {h.get('score','0')}-{a.get('score','0')} {a['team']['displayName']} | {wat(ev.get('date',''))}")
+                buttons.append([{"text":f"{icon} {h['team']['shortDisplayName']} vs {a['team']['shortDisplayName']} STATS","callback_data":f"detail_{lid}_{eid}"}])
         except: continue
-    return games[:20]
+    return games, buttons
 
-def get_live():
+def get_live_buttons():
     today_str = date.today().strftime("%Y%m%d")
     lives = []
+    buttons = []
     for lid in ["eng.1","esp.1","ita.1","ger.1","tur.1","uefa.champions","fra.1"]:
         try:
             url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today_str}"
@@ -132,38 +178,18 @@ def get_live():
                     if len(teams) < 2: continue
                     h = next((t for t in teams if t.get("homeAway")=="home"), teams[0])
                     a = next((t for t in teams if t.get("homeAway")=="away"), teams[1])
-                    detail = ev.get("status",{}).get("type",{}).get("detail","LIVE")
-                    lives.append(f"🔴 *{h['team']['displayName']} {h.get('score','0')}-{a.get('score','0')} {a['team']['displayName']}* | {detail} | {wat(ev.get('date',''))}")
+                    eid = ev.get("id")
+                    lives.append(f"🔴 *{h['team']['displayName']} {h.get('score','0')}-{a.get('score','0')} {a['team']['displayName']}* | {ev['status']['type']['detail']}")
+                    buttons.append([{"text":f"📊 {h['team']['shortDisplayName']} {h.get('score','0')}-{a.get('score','0')} {a['team']['shortDisplayName']} - STATS","callback_data":f"detail_{lid}_{eid}"}])
         except: continue
-    return lives
-
-def search_team(q):
-    q = q.lower()
-    today_str = date.today().strftime("%Y%m%d")
-    found = []
-    for lid in ["eng.1","esp.1","ita.1","ger.1","tur.1","uefa.champions"]:
-        try:
-            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today_str}"
-            with urllib.request.urlopen(url, timeout=8) as r:
-                d = json.loads(r.read().decode())
-            for ev in d.get("events", []):
-                comp = ev.get("competitions", [{}])[0]
-                teams = comp.get("competitors", [])
-                for tm in teams:
-                    if q in tm['team']['displayName'].lower():
-                        h = next((t for t in teams if t.get("homeAway")=="home"), teams[0])
-                        a = next((t for t in teams if t.get("homeAway")=="away"), teams[1])
-                        found.append(f"🔍 {h['team']['displayName']} vs {a['team']['displayName']} - {wat(ev.get('date',''))} | {lid}")
-                        break
-        except: continue
-    return found[:8]
+    return lives, buttons
 
 def notifier():
-    print("🔔 Auto goal notifier ON (30s)")
+    print("🔔 Auto goal notifier + LIVE alerts ON")
     while True:
         try:
             today_str = date.today().strftime("%Y%m%d")
-            for lid in ["eng.1","esp.1","ita.1","ger.1","tur.1","uefa.champions"]:
+            for lid in ["eng.1","esp.1","ita.1","ger.1","tur.1","uefa.champions","fra.1"]:
                 try:
                     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today_str}"
                     with urllib.request.urlopen(url, timeout=8) as r:
@@ -188,21 +214,23 @@ def notifier():
                                 conn.commit()
                                 for chat_id, fav in db_get_favs():
                                     if fav in h["team"]["displayName"].lower() or fav in a["team"]["displayName"].lower():
-                                        send(chat_id, f"⚽ *GOAL!* {h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}\n⏱️ {ev['status']['type']['detail']} | {wat(ev.get('date',''))}\n\nYour team {fav.title()} scored!", back_kb())
+                                        # improved notification with stats button
+                                        kb = {"inline_keyboard": [[{"text":"📊 View Live Stats","callback_data":f"detail_{lid}_{eid}"}], [{"text":"⬅️ Menu","callback_data":"menu"}]]}
+                                        send(chat_id, f"⚽ *GOAL ALERT!* {fav.title()}\n\n🔥 *{h['team']['displayName']} {hs}-{as_} {a['team']['displayName']}*\n⏱️ {ev['status']['type']['detail']} | {wat(ev.get('date',''))}", kb)
                 except: continue
-            time.sleep(30)
+            time.sleep(25)
         except Exception as e:
-            print("Notifier err", e); time.sleep(30)
+            print("Notifier err", e); time.sleep(25)
 
 threading.Thread(target=notifier, daemon=True).start()
 
 offset = 0
-print("✅ BOT RUNNING")
+print("✅ BOT RUNNING V2 - WITH STATS")
 
 while True:
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={offset}&timeout=30"
-        with urllib.request.urlopen(url, timeout=20) as r:
+        with urllib.request.urlopen(url, timeout=35) as r:
             data = json.loads(r.read().decode())
         for up in data.get("result", []):
             offset = up["update_id"] + 1
@@ -213,27 +241,35 @@ while True:
                 cid = cb["id"]
                 if d == "menu":
                     answer_cb(cid)
-                    send(chat_id, "⚽ *Football Hub - All times WAT 🇳🇬*\nTap to navigate:", menu_kb())
+                    send(chat_id, "⚽ *Football Hub PRO - All times WAT 🇳🇬*\nTap to navigate:", menu_kb())
                 elif d.startswith("table_"):
                     lid = d.replace("table_","")
-                    answer_cb(cid, "Loading table...")
-                    send(chat_id, REAL.get(lid, REAL["eng.1"]), back_kb())
+                    answer_cb(cid, "Loading LIVE table...")
+                    send(chat_id, get_table(lid), back_kb())
                 elif d == "today":
                     answer_cb(cid, "Fetching today...")
-                    g = get_today()
-                    txt = "📅 *Today's Games (WAT):*\n\n" + "\n\n".join(g) if g else "No games found today."
-                    send(chat_id, txt, back_kb())
+                    g, btns = get_today_buttons()
+                    kb = {"inline_keyboard": btns + [[{"text":"⬅️ Back to Menu","callback_data":"menu"}]]}
+                    txt = "📅 *Today's Games (WAT):*\n\n" + "\n".join(g) if g else "No games found today."
+                    send(chat_id, txt, kb)
                 elif d == "live":
                     answer_cb(cid, "Checking live...")
-                    g = get_live()
-                    txt = "🔴 *Live Now:*\n\n" + "\n\n".join(g) if g else "😴 No live games now."
-                    send(chat_id, txt, back_kb())
+                    g, btns = get_live_buttons()
+                    kb = {"inline_keyboard": btns + [[{"text":"⬅️ Back to Menu","callback_data":"menu"}]]}
+                    txt = "🔴 *Live Now - Tap for STATS:*\n\n" + "\n\n".join(g) if g else "😴 No live games now."
+                    send(chat_id, txt, kb)
+                elif d.startswith("detail_"):
+                    _, lid, eid = d.split("_",2)
+                    answer_cb(cid, "Loading stats...")
+                    detail = get_match_detail(eid, lid)
+                    kb = {"inline_keyboard": [[{"text":"🔄 Refresh Stats","callback_data":d}], [{"text":"⬅️ Back to Menu","callback_data":"menu"}]]}
+                    send(chat_id, detail, kb)
                 elif d == "myteam":
                     answer_cb(cid)
                     cur.execute("SELECT team FROM favs WHERE chat_id=?", (str(chat_id),))
                     r = cur.fetchone()
                     if r:
-                        send(chat_id, f"⭐ Your team: *{r[0].title()}*\nYou will get GOAL alerts!", back_kb())
+                        send(chat_id, f"⭐ Your team: *{r[0].title()}*\n🔔 You will get GOAL + LIVE alerts!", back_kb())
                     else:
                         send(chat_id, "⭐ No team yet. Type team name like `Arsenal`", back_kb())
                 continue
@@ -242,20 +278,10 @@ while True:
             txt = up["message"].get("text","").strip()
             low = txt.lower().replace("@myfootballaiagent_bot","")
             if low.startswith("/start") or low == "menu":
-                send(chat_id, "⚽ *Welcome to Football Hub - Final!*\n\n✅ Today with WAT time\n✅ Live scores\n✅ Real tables + World Cup\n✅ Auto GOAL alerts\n\n*Tap below or type team name like Arsenal:*", menu_kb())
-            elif low.startswith("/today"):
-                g = get_today()
-                send(chat_id, "📅 *Today (WAT):*\n\n" + "\n\n".join(g) if g else "No games today", back_kb())
-            elif low.startswith("/live"):
-                g = get_live()
-                send(chat_id, "🔴 *Live Now:*\n\n" + "\n\n".join(g) if g else "No live games now", back_kb())
+                send(chat_id, "⚽ *Welcome to Football Hub PRO!*\n\n✅ REAL tables (auto update)\n✅ Live stats - possession, shots\n✅ Lineups + H2H\n✅ Tap any live game for stats\n✅ Auto GOAL alerts for your team\n\n*Tap below or type team name like Arsenal:*", menu_kb())
             elif len(low) >= 3 and not low.startswith("/"):
                 db_add_fav(chat_id, low)
-                f = search_team(low)
-                if f:
-                    send(chat_id, f"⭐ Saved *{txt.title()}* as your team! Goal alerts ON 🔔\n\n🔍 *Found today:*\n" + "\n".join(f), back_kb())
-                else:
-                    send(chat_id, f"⭐ Saved *{txt.title()}*! You will get goal alerts.\n\nNo games for {txt.title()} today.", back_kb())
+                send(chat_id, f"⭐ Saved *{txt.title()}* as your team!\n🔔 Goal + Live alerts ON! You will get notified whenever {txt.title()} scores.\n\nTry Live Now to see stats.", back_kb())
         time.sleep(1)
     except Exception as e:
         print("Loop error:", e)

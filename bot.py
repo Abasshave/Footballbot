@@ -10,27 +10,12 @@ def home():
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 Thread(target=run_web, daemon=True).start()
 
-import urllib.request, urllib.parse, json, time, sqlite3, threading, os
+import urllib.request, urllib.parse, json, time, sqlite3, threading
 from datetime import datetime, date
-
-# Fake web server for Render free
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is alive!")
-
-def run_fake_server():
-    port = int(os.environ.get("PORT", 10000))
-    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
-
-threading.Thread(target=run_fake_server, daemon=True).start()
 
 import os
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -54,7 +39,7 @@ def db_get_favs():
 
 def send(chat_id, text, keyboard=None):
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
         if keyboard:
             payload["reply_markup"] = json.dumps(keyboard)
@@ -65,7 +50,7 @@ def send(chat_id, text, keyboard=None):
 
 def answer_cb(cb_id, text=""):
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
+        url = f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery"
         payload = {"callback_query_id": cb_id, "text": text}
         data = urllib.parse.urlencode(payload).encode()
         urllib.request.urlopen(url, data=data, timeout=5)
@@ -216,7 +201,7 @@ print("✅ BOT RUNNING")
 
 while True:
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={offset}&timeout=30"
+        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={offset}&timeout=30"
         with urllib.request.urlopen(url, timeout=20) as r:
             data = json.loads(r.read().decode())
         for up in data.get("result", []):

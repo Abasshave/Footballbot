@@ -1,2 +1,2 @@
 Flask
-urllib3
+Pillow

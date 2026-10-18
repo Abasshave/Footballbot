@@ -3,7 +3,7 @@ from threading import Thread
 import os
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Football Bot V12 OK"
+def home(): return "Football Bot V12.1 OK - Shows Scorer"
 def run_web():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), use_reloader=False)
 Thread(target=run_web, daemon=True).start()
@@ -104,7 +104,7 @@ def edit_photo(chat_id, msg_id, photo_path, caption="", kb=None):
         urllib.request.urlopen(req, timeout=20)
         print("EDIT OK")
     except Exception as e:
-        print("edit_photo err - not sending new", e)
+        print("edit_photo err", e)
 
 def edit_msg(chat_id, msg_id, text, kb=None):
     try:
@@ -143,7 +143,7 @@ def fetch_json(url):
 
 LEAGUE_NAMES = {
     "eng.1": "Premier League",
-    "tur.1": "Süper Lig Türkiye",
+    "tur.1": "Super Lig Turkiye",
     "esp.1": "La Liga",
     "ger.1": "Bundesliga",
     "ita.1": "Serie A",
@@ -155,7 +155,8 @@ def get_goal_detail(event_id, lid):
         d = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/summary?event={event_id}")
         if not d:
             return "", "Goal", ""
-        for play in reversed((d.get("commentary", []) or [])[-70:]):
+        commentary = d.get("commentary", []) or []
+        for play in reversed(commentary[-70:]):
             txt_low = (play.get("text","") + " " + play.get("type",{}).get("text","")).lower()
             scorer = ""
             if play.get("athletesInvolved"):
@@ -205,7 +206,6 @@ def generate_table_image(lid):
             break
     if not entries:
         return None
-
     live_map = {}
     today = date.today().strftime("%Y%m%d")
     sd = fetch_json(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lid}/scoreboard?dates={today}")
@@ -228,20 +228,17 @@ def generate_table_image(lid):
                     "pts": 3 if as_>hs else 1 if hs==as_ else 0,
                     "gd": as_-hs
                 }
-
     W, row_h, header_h = 760, 58, 95
     H = header_h + len(entries)*row_h + 15
     img = Image.new("RGB", (W, H), (18,18,18))
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default()
-
     draw.rectangle([0,0,W,header_h], fill=(28,28,28))
     draw.text((20,12), LEAGUE_NAMES.get(lid,lid), font=font, fill=(255,255,255))
     draw.text((20,52), "Live", fill=(255,60,60))
     draw.text((445,52), "P", fill=(170,170,170))
     draw.text((515,52), "GD", fill=(170,170,170))
     draw.text((605,52), "Pts", fill=(255,255,255))
-
     y = header_h
     for i, e in enumerate(entries, 1):
         team = e.get("team", {})
@@ -250,7 +247,6 @@ def generate_table_image(lid):
         logo_url = None
         if team.get("logos"):
             logo_url = team["logos"][0].get("href")
-
         stats = {s['name']: s.get('value', 0) for s in e.get("stats", [])}
         games = int(stats.get("gamesPlayed", 0))
         if games == 0:
@@ -261,7 +257,6 @@ def generate_table_image(lid):
         pts_live = pts + lm['pts'] if lm else pts
         gd_live = gd + lm['gd'] if lm else gd
         live_txt = lm['score'] if lm else ""
-
         bg = (28,28,38) if i%2==0 else (22,22,28)
         if lm:
             bg = (50,35,35)
@@ -270,23 +265,19 @@ def generate_table_image(lid):
             draw.rectangle([0,y,6,y+row_h], fill=(60,120,255))
         elif i <= 4:
             draw.rectangle([0,y,6,y+row_h], fill=(100,220,130))
-
         draw.text((18, y+18), str(i), fill=(220,220,220))
         if logo_url:
             logo_img = download_logo(logo_url)
             if logo_img:
                 img.paste(logo_img, (52, y+7), logo_img)
         draw.text((108, y+18), short, fill=(255,255,255))
-
         if lm:
             draw.rounded_rectangle([330, y+12, 405, y+44], radius=8, fill=(220,50,50))
             draw.text((342, y+16), live_txt, fill=(255,255,255))
-
         draw.text((452, y+18), str(games), fill=(210,210,210))
         draw.text((520, y+18), str(gd_live), fill=(210,210,210))
         draw.text((615, y+18), str(pts_live), fill=(255,255,255))
         y += row_h
-
     path = f"/tmp/table_{lid}.png"
     img.save(path)
     return path
@@ -318,7 +309,7 @@ def get_matches(lid, only_live=False):
 def main_menu():
     return {
         "inline_keyboard": [
-            [{"text": "🇹🇷 Süper Lig", "callback_data": "league_tur.1"}, {"text": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL", "callback_data": "league_eng.1"}],
+            [{"text": "🇹🇷 Super Lig", "callback_data": "league_tur.1"}, {"text": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 EPL", "callback_data": "league_eng.1"}],
             [{"text": "🏆 Champions League", "callback_data": "league_uefa.champions"}, {"text": "🇪🇸 La Liga", "callback_data": "league_esp.1"}],
             [{"text": "🔴 Live Now", "callback_data": "live"}, {"text": "📅 Today", "callback_data": "today"}]
         ]
@@ -382,28 +373,24 @@ def notifier():
 threading.Thread(target=notifier, daemon=True).start()
 
 offset = 0
-print("V12 RUNNING")
+print("V12.1 RUNNING")
 while True:
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={offset}&timeout=30"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=35) as r:
             data = json.loads(r.read().decode())
-
         for up in data.get("result", []):
             offset = up["update_id"] + 1
-
             if "callback_query" in up:
                 cb = up["callback_query"]
                 chat_id = cb["message"]["chat"]["id"]
                 msg_id = cb["message"]["message_id"]
                 d = cb["data"]
                 cid = cb["id"]
-
                 if d == "menu":
                     answer_cb(cid)
                     send(chat_id, "⚽ Football Hub\nChoose league:", main_menu())
-
                 elif d.startswith("league_") or d.startswith("table_"):
                     lid = d.replace("league_", "").replace("table_", "")
                     answer_cb(cid, "Generating table...")
@@ -411,7 +398,6 @@ while True:
                     if path:
                         cap = f"*{LEAGUE_NAMES.get(lid)} - FULL TABLE*"
                         send_photo(chat_id, path, cap, league_tabs(lid))
-
                 elif d.startswith("refresh_table_"):
                     lid = d.replace("refresh_table_", "")
                     answer_cb(cid, "Refreshing...")
@@ -419,10 +405,9 @@ while True:
                     if path:
                         cap = f"*{LEAGUE_NAMES.get(lid)} - FULL TABLE* (Refreshed)"
                         edit_photo(chat_id, msg_id, path, cap, league_tabs(lid))
-
                 elif d.startswith("refresh_matches_"):
                     lid = d.replace("refresh_matches_", "")
-                    answer_cb(cid, "Refreshing...")
+                    answer_cb(cid, "Refreshing matches...")
                     txt = get_matches(lid)
                     full = f"*{LEAGUE_NAMES.get(lid)}*\n\n" + (txt or "No matches")
                     kb = {
@@ -433,7 +418,6 @@ while True:
                         ]
                     }
                     edit_msg(chat_id, msg_id, full, kb)
-
                 elif d.startswith("matches_"):
                     lid = d.replace("matches_", "")
                     answer_cb(cid, "Loading matches...")
@@ -444,9 +428,9 @@ while True:
                             [{"text": "🔄 Refresh Matches", "callback_data": f"refresh_matches_{lid}"}],
                             [{"text": "📊 Table", "callback_data": f"table_{lid}"}],
                             [{"text": "⬅️ Menu", "callback_data": "menu"}]
+                        ]
                     }
                     send(chat_id, full, kb)
-
                 elif d == "live":
                     answer_cb(cid, "Checking live...")
                     live_txt = "🔴 *Live Now*\n\n"
@@ -454,5 +438,4 @@ while True:
                     for lid in ["tur.1", "eng.1", "esp.1", "ita.1", "ger.1", "uefa.champions"]:
                         m = get_matches(lid, only_live=True)
                         if m:
-                            live_txt += f"*{LEAGUE_NAMES.get(lid)}:*\n{m}\n"
-             
+                            live_txt += f"*

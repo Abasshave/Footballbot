@@ -287,4 +287,4 @@ while True:
                 db_add_fav(chat_id, low); send(chat_id, f"⭐ {txt.title()} saved!", main_menu())
         time.sleep(1)
     except Exception as e:
-        print("loop err", e); time.sleep(3)
+        print("loop err", e); time.sleep(3) 

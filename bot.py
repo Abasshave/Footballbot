@@ -4,11 +4,13 @@ import json
 import time
 import sqlite3
 import threading
+import queue
+import unicodedata
 import urllib.request
 import urllib.parse
 import urllib.error
 from datetime import datetime, timedelta, timezone
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import Flask
 from PIL import Image, ImageDraw, ImageFont
@@ -63,8 +65,12 @@ NAT_TEAM_LIDS = [
 ]
 
 CUP_IDS = [
-    "eng.fa", "eng.league_cup", "esp.copa_del_rey", "ger.dfb_pokal", "ita.coppa_italia", "fra.coupe_de_france"
-] + INTERNATIONAL_IDS + AFRICA_IDS
+    "eng.fa", "eng.league_cup", "esp.copa_del_rey", "ger.dfb_pokal", "ita.coppa_italia", "fra.coupe_de_france",
+    "fifa.friendly"
+]
+
+NATIONAL_COMP_IDS = INTERNATIONAL_IDS + AFRICA_IDS
+NATIONAL_TEAM_LIDS = [lid for lid in NATIONAL_COMP_IDS if lid not in ("caf.champions", "caf.confed")]
 
 MORE_LEAGUE_IDS = [
     "ned.1", "por.1", "eng.fa", "eng.league_cup",
@@ -154,7 +160,7 @@ IDLE_POLL = 60
 EMPTY_POLL = 300
 PEN_CHECK_SECONDS = 25
 SCORER_WAIT_SECONDS = 300
-SEND_GAP = 0.04
+SEND_GAP = 0.035
 LINEUP_WINDOW = 95
 LINEUP_CHECK_SECONDS = 45
 DEFAULT_TZ = 60
@@ -225,6 +231,7 @@ def run_web():
 fetch_pool = ThreadPoolExecutor(max_workers=12)
 update_pool = ThreadPoolExecutor(max_workers=8)
 SEND_POOL = ThreadPoolExecutor(max_workers=12)
+EXTRA_POOL = ThreadPoolExecutor(max_workers=6)
 DAY_POOL = ThreadPoolExecutor(max_workers=12)
 
 db_lock = threading.Lock()
@@ -253,6 +260,11 @@ GOAL_LOG = {}
 LAST_LINEUP = {}
 FT_TIME = {}
 FT_WAIT = {}
+ALERT_QUEUE = queue.Queue()
+SENDER = {"thread": None}
+SENDER_LOCK = threading.Lock()
+SUMMARY_BUSY = set()
+TEAM_CACHE = {}
 SO_STATE = {}
 LEAGUE_OK = set()
 RED_LOG = {}
@@ -281,6 +293,307 @@ TEAM_EMOJI = {
     "sporting": "🟢", "ajax": "⚪🔴", "psv": "🔴⚪", "feyenoord": "🔴⚪",
     "celtic": "🟢", "club brugge": "🔵⚫", "salzburg": "🔴⚪", "shakhtar": "🟠⚫"
 }
+
+
+COUNTRY_DATA = """
+AFG|af|Afghanistan
+AUS|au|Australia
+BHR|bh|Bahrain
+BAN|bd|Bangladesh
+BHU|bt|Bhutan
+BRU|bn|Brunei
+CAM|kh|Cambodia
+CHN|cn|China
+TPE|tw|Chinese Taipei
+GUM|gu|Guam
+HKG|hk|Hong Kong
+IND|in|India
+IDN|id|Indonesia
+IRN|ir|Iran
+IRQ|iq|Iraq
+JPN|jp|Japan
+JOR|jo|Jordan
+PRK|kp|North Korea
+KOR|kr|South Korea
+KUW|kw|Kuwait
+KGZ|kg|Kyrgyzstan
+LAO|la|Laos
+LBN|lb|Lebanon
+LIB|lb|Lebanon
+MAC|mo|Macau
+MAS|my|Malaysia
+MDV|mv|Maldives
+MNG|mn|Mongolia
+MYA|mm|Myanmar
+NEP|np|Nepal
+NMI|mp|Northern Mariana Islands
+OMA|om|Oman
+PAK|pk|Pakistan
+PLE|ps|Palestine
+PHI|ph|Philippines
+QAT|qa|Qatar
+KSA|sa|Saudi Arabia
+SGP|sg|Singapore
+SIN|sg|Singapore
+SRI|lk|Sri Lanka
+SYR|sy|Syria
+TJK|tj|Tajikistan
+THA|th|Thailand
+TLS|tl|Timor-Leste
+TKM|tm|Turkmenistan
+UAE|ae|United Arab Emirates
+UZB|uz|Uzbekistan
+VIE|vn|Vietnam
+YEM|ye|Yemen
+ALG|dz|Algeria
+ANG|ao|Angola
+BEN|bj|Benin
+BOT|bw|Botswana
+BFA|bf|Burkina Faso
+BDI|bi|Burundi
+CMR|cm|Cameroon
+CPV|cv|Cape Verde
+CTA|cf|Central African Republic
+CHA|td|Chad
+COM|km|Comoros
+CGO|cg|Congo
+COD|cd|DR Congo
+CIV|ci|Ivory Coast
+DJI|dj|Djibouti
+EGY|eg|Egypt
+EQG|gq|Equatorial Guinea
+ERI|er|Eritrea
+SWZ|sz|Eswatini
+ETH|et|Ethiopia
+GAB|ga|Gabon
+GAM|gm|Gambia
+GHA|gh|Ghana
+GUI|gn|Guinea
+GNB|gw|Guinea-Bissau
+KEN|ke|Kenya
+LES|ls|Lesotho
+LBR|lr|Liberia
+LBY|ly|Libya
+MAD|mg|Madagascar
+MWI|mw|Malawi
+MLI|ml|Mali
+MTN|mr|Mauritania
+MRI|mu|Mauritius
+MAR|ma|Morocco
+MOZ|mz|Mozambique
+NAM|na|Namibia
+NIG|ne|Niger
+NGA|ng|Nigeria
+RWA|rw|Rwanda
+STP|st|Sao Tome and Principe
+SEN|sn|Senegal
+SEY|sc|Seychelles
+SLE|sl|Sierra Leone
+SOM|so|Somalia
+RSA|za|South Africa
+SSD|ss|South Sudan
+SDN|sd|Sudan
+TAN|tz|Tanzania
+TOG|tg|Togo
+TUN|tn|Tunisia
+UGA|ug|Uganda
+ZAM|zm|Zambia
+ZIM|zw|Zimbabwe
+AIA|ai|Anguilla
+ATG|ag|Antigua and Barbuda
+ARU|aw|Aruba
+BAH|bs|Bahamas
+BRB|bb|Barbados
+BLZ|bz|Belize
+BER|bm|Bermuda
+VGB|vg|British Virgin Islands
+CAN|ca|Canada
+CAY|ky|Cayman Islands
+CRC|cr|Costa Rica
+CUB|cu|Cuba
+CUW|cw|Curacao
+DMA|dm|Dominica
+DOM|do|Dominican Republic
+SLV|sv|El Salvador
+GRN|gd|Grenada
+GUA|gt|Guatemala
+GUY|gy|Guyana
+HAI|ht|Haiti
+HON|hn|Honduras
+JAM|jm|Jamaica
+MEX|mx|Mexico
+MSR|ms|Montserrat
+NCA|ni|Nicaragua
+PAN|pa|Panama
+PUR|pr|Puerto Rico
+SKN|kn|Saint Kitts and Nevis
+LCA|lc|Saint Lucia
+VIN|vc|Saint Vincent and the Grenadines
+SUR|sr|Suriname
+TRI|tt|Trinidad and Tobago
+TCA|tc|Turks and Caicos Islands
+USA|us|United States
+VIR|vi|US Virgin Islands
+ARG|ar|Argentina
+BOL|bo|Bolivia
+BRA|br|Brazil
+CHI|cl|Chile
+COL|co|Colombia
+ECU|ec|Ecuador
+PAR|py|Paraguay
+PER|pe|Peru
+URU|uy|Uruguay
+VEN|ve|Venezuela
+ASA|as|American Samoa
+COK|ck|Cook Islands
+FIJ|fj|Fiji
+NCL|nc|New Caledonia
+NZL|nz|New Zealand
+PNG|pg|Papua New Guinea
+SAM|ws|Samoa
+SOL|sb|Solomon Islands
+TAH|pf|Tahiti
+TGA|to|Tonga
+VAN|vu|Vanuatu
+ALB|al|Albania
+AND|ad|Andorra
+ARM|am|Armenia
+AUT|at|Austria
+AZE|az|Azerbaijan
+BLR|by|Belarus
+BEL|be|Belgium
+BIH|ba|Bosnia and Herzegovina
+BUL|bg|Bulgaria
+CRO|hr|Croatia
+CYP|cy|Cyprus
+CZE|cz|Czechia
+DEN|dk|Denmark
+ENG|ENG|England
+EST|ee|Estonia
+FRO|fo|Faroe Islands
+FIN|fi|Finland
+FRA|fr|France
+GEO|ge|Georgia
+GER|de|Germany
+GIB|gi|Gibraltar
+GRE|gr|Greece
+HUN|hu|Hungary
+ISL|is|Iceland
+ISR|il|Israel
+ITA|it|Italy
+KAZ|kz|Kazakhstan
+KVX|xk|Kosovo
+KOS|xk|Kosovo
+LVA|lv|Latvia
+LIE|li|Liechtenstein
+LTU|lt|Lithuania
+LUX|lu|Luxembourg
+MLT|mt|Malta
+MDA|md|Moldova
+MNE|me|Montenegro
+NED|nl|Netherlands
+MKD|mk|North Macedonia
+NIR|NIR|Northern Ireland
+NOR|no|Norway
+POL|pl|Poland
+POR|pt|Portugal
+IRL|ie|Republic of Ireland
+ROU|ro|Romania
+RUS|ru|Russia
+SMR|sm|San Marino
+SCO|SCO|Scotland
+SRB|rs|Serbia
+SVK|sk|Slovakia
+SVN|si|Slovenia
+ESP|es|Spain
+SWE|se|Sweden
+SUI|ch|Switzerland
+TUR|tr|Turkey
+UKR|ua|Ukraine
+WAL|WAL|Wales
+"""
+
+COUNTRY_ALIASES = [
+    ("CIV", "Cote d'Ivoire"), ("KOR", "Korea Republic"), ("KOR", "Korea"), ("PRK", "Korea DPR"),
+    ("IRN", "IR Iran"), ("CZE", "Czech Republic"), ("TUR", "Turkiye"), ("USA", "USA"),
+    ("USA", "United States of America"), ("COD", "Congo DR"), ("COD", "Democratic Republic of the Congo"),
+    ("CGO", "Republic of the Congo"), ("CGO", "Congo Republic"), ("CPV", "Cabo Verde"),
+    ("CPV", "Cape Verde Islands"), ("SWZ", "Swaziland"), ("MKD", "Macedonia"), ("BIH", "Bosnia-Herzegovina"),
+    ("BIH", "Bosnia"), ("IRL", "Ireland"), ("CHN", "China PR"), ("TPE", "Taiwan"), ("VIE", "Viet Nam"),
+    ("KGZ", "Kyrgyz Republic"), ("MYA", "Burma"), ("TLS", "East Timor"), ("GAM", "The Gambia"),
+    ("TRI", "Trinidad & Tobago"), ("SKN", "St. Kitts and Nevis"), ("LCA", "St. Lucia"),
+    ("VIN", "St. Vincent and the Grenadines"), ("STP", "Sao Tome & Principe"), ("ATG", "Antigua & Barbuda"),
+    ("UAE", "UAE"), ("PLE", "Palestinian Territories")
+]
+
+
+def norm_name(text):
+    t = unicodedata.normalize("NFKD", str(text))
+    t = "".join([ch for ch in t if not unicodedata.combining(ch)])
+    t = t.lower().replace("&", "and")
+    out = ""
+    for ch in t:
+        if ch.isalnum() or ch == " ":
+            out += ch
+        elif ch == "-":
+            out += " "
+    return " ".join(out.split())
+
+
+def make_flag(iso):
+    if iso == "ENG":
+        return "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F"
+    if iso == "SCO":
+        return "\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F"
+    if iso == "WAL":
+        return "\U0001F3F4\U000E0067\U000E0062\U000E0077\U000E006C\U000E0073\U000E007F"
+    if iso == "NIR":
+        return "\U0001F1EC\U0001F1E7"
+    iso = iso.lower()
+    if len(iso) != 2:
+        return ""
+    return chr(0x1F1E6 + ord(iso[0]) - 97) + chr(0x1F1E6 + ord(iso[1]) - 97)
+
+
+def build_flag_tables():
+    by_code = {}
+    by_name = {}
+    for line in COUNTRY_DATA.strip().split("\n"):
+        parts = line.split("|")
+        if len(parts) != 3:
+            continue
+        flag = make_flag(parts[1])
+        by_code[parts[0]] = flag
+        by_name[norm_name(parts[2])] = flag
+    for code, alias in COUNTRY_ALIASES:
+        if code in by_code:
+            by_name[norm_name(alias)] = by_code[code]
+    return by_code, by_name
+
+
+FLAG_BY_CODE, FLAG_BY_NAME = build_flag_tables()
+
+
+def flag_for(name, abbr=""):
+    if abbr:
+        found = FLAG_BY_CODE.get(str(abbr).upper())
+        if found:
+            return found
+    return FLAG_BY_NAME.get(norm_name(name), "")
+
+
+def flagged(name, abbr=""):
+    flag = flag_for(name, abbr)
+    if flag:
+        return flag + " " + esc(name)
+    return esc(name)
+
+
+def flag_prefix(name, abbr=""):
+    flag = flag_for(name, abbr)
+    if flag:
+        return flag + " "
+    return ""
 
 
 def load_club_emoji():
@@ -515,10 +828,10 @@ def db_mark_seen(event_id, key):
 # ---------------------------------------------------------------
 
 
-def fetch_json(url):
+def fetch_json(url, timeout=12):
     try:
         req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception as err:
         LAST_ERRORS["espn"] = str(err) + " | " + url[-70:] + " (" + stamp() + ")"
@@ -526,18 +839,20 @@ def fetch_json(url):
         return None
 
 
-def fetch_scoreboard(lid, date_str, today=True, fresh=False):
+def fetch_scoreboard(lid, date_str, today=True, fresh=False, timeout=12):
     urls = []
     use_bust = fresh and CACHE_BUST["on"]
     if use_bust:
         urls.append(ESPN + lid + "/scoreboard?dates=" + date_str + "&_=" + str(int(time.time() * 1000)))
     urls.append(ESPN + lid + "/scoreboard?dates=" + date_str)
-    urls.append(ESPN_ALT + lid + "/scoreboard?dates=" + date_str)
-    if today:
-        urls.append(ESPN + lid + "/scoreboard")
+    dead = lid not in LEAGUE_OK and FAILS.get(lid, 0) >= 1
+    if not dead:
+        urls.append(ESPN_ALT + lid + "/scoreboard?dates=" + date_str)
+        if today:
+            urls.append(ESPN + lid + "/scoreboard")
     bust_failed = False
     for i, url in enumerate(urls):
-        data = fetch_json(url)
+        data = fetch_json(url, timeout)
         if data is not None:
             if use_bust and i == 0:
                 CACHE_BUST["fails"] = 0
@@ -896,15 +1211,17 @@ def mc_kb(lid, eid):
 
 
 def table_kb(lid):
-    return {"inline_keyboard": [
+    kb_rows = [
         [
             {"text": "📊 Table", "callback_data": "tbl:" + lid},
             {"text": "⚽ Matches", "callback_data": "mat:" + lid}
         ],
-        [{"text": "🔄 Refresh Table", "callback_data": "rt:" + lid}],
-        [{"text": "🏅 Top Scorers", "callback_data": "ts:" + lid}],
-        [{"text": "⬅️ Main Menu", "callback_data": "menu"}]
-    ]}
+        [{"text": "🔄 Refresh Table", "callback_data": "rt:" + lid}]
+    ]
+    if lid not in NATIONAL_COMP_IDS:
+        kb_rows.append([{"text": "🏅 Top Scorers", "callback_data": "ts:" + lid}])
+    kb_rows.append([{"text": "⬅️ Main Menu", "callback_data": "menu"}])
+    return {"inline_keyboard": kb_rows}
 
 
 def matches_kb(lid, rows=None):
@@ -961,7 +1278,11 @@ def scoreboard_url(lid, date_str):
 def get_scoreboard(lid, fresh=False):
     now = time.time()
     cached = SB_CACHE.get(lid)
-    if cached and not fresh and (now - cached[0]) < SB_TTL:
+    if LEAGUE_FAST.get(lid, False):
+        ttl = SB_TTL
+    else:
+        ttl = 120
+    if cached and not fresh and (now - cached[0]) < ttl:
         return cached[1]
     data = fetch_scoreboard(lid, today_str(), True)
     if data is not None:
@@ -1069,6 +1390,10 @@ def minutes_to_kickoff(iso):
 def match_status(info):
     if info["state"] == "pre":
         return kickoff_hm(info["date"])
+    hp = info.get("hp")
+    ap = info.get("ap")
+    if info["state"] == "post" and hp is not None and ap is not None and hp != ap and (hp + ap) > 0:
+        return "Pen " + str(hp) + "-" + str(ap)
     return info["short"] or info["minute"] or "-"
 
 
@@ -1166,7 +1491,8 @@ def text_from_groups(title, groups):
             else:
                 mid = str(r["hs"]) + "-" + str(r["a_s"])
                 status = r["short"] or r["minute"]
-            text += team_tag(r["hshort"], r["hid"]) + esc(r["hshort"]) + " " + mid + " " + team_tag(r["ashort"], r["aid"]) + esc(r["ashort"]) + " • " + esc(status) + "\n"
+            text += (team_tag(r["hshort"], r["hid"], r.get("habbr", ""), r.get("lid", "")) + esc(r["hshort"]) + " " + mid + " " +
+                     team_tag(r["ashort"], r["aid"], r.get("aabbr", ""), r.get("lid", "")) + esc(r["ashort"]) + " • " + esc(status) + "\n")
         text += "\n"
     text += "🔄 Updated " + stamp()
     return text[:4000]
@@ -1256,8 +1582,7 @@ def num(stats, names):
     return 0
 
 
-def get_table_rows(lid):
-    entries = get_standings(lid)
+def rows_from_entries(entries):
     rows = []
     for e in entries:
         team = e.get("team") or {}
@@ -1291,6 +1616,41 @@ def get_table_rows(lid):
     else:
         rows.sort(key=lambda r: (-r["pts"], -r["gd"]))
     return rows
+
+
+def get_standings_groups(lid):
+    urls = [ESPN_V2 + lid + "/standings", ESPN_V2_ALT + lid + "/standings"]
+    for url in urls:
+        data = fetch_json(url)
+        if not data:
+            continue
+        groups = []
+        children = data.get("children")
+        if children:
+            for child in children:
+                entries = (child.get("standings") or {}).get("entries") or []
+                if entries:
+                    groups.append((child.get("name") or child.get("abbreviation") or "", entries))
+        elif data.get("standings"):
+            entries = data["standings"].get("entries") or []
+            if entries:
+                groups.append(("", entries))
+        if groups:
+            return groups
+    return []
+
+
+def get_table_groups(lid):
+    groups = []
+    for name, entries in get_standings_groups(lid):
+        rows = rows_from_entries(entries)
+        if rows:
+            groups.append((name, rows))
+    return groups
+
+
+def get_table_rows(lid):
+    return rows_from_entries(get_standings(lid))
 
 
 def get_live_map(lid):
@@ -1416,14 +1776,21 @@ def draw_right(draw, x_right, y, text, font, fill):
     draw.text((x_right - width, y), text, font=font, fill=fill)
 
 
-def render_table(lid, rows, live_map, logos):
+def render_table(lid, groups, live_map, logos):
     title = LEAGUE_TITLES.get(lid, lid)
     width = 820
     head_h = 84
     col_h = 38
     row_h = 40
+    group_h = 30
     foot_h = 44
-    height = head_h + col_h + row_h * len(rows) + foot_h
+    multi = len(groups) > 1
+    total_rows = 0
+    for g in groups:
+        total_rows += len(g[1])
+    height = head_h + col_h + row_h * total_rows + foot_h
+    if multi:
+        height += group_h * len(groups)
 
     img = Image.new("RGB", (width, height), (16, 20, 30))
     draw = ImageDraw.Draw(img)
@@ -1434,9 +1801,13 @@ def render_table(lid, rows, live_map, logos):
     f_bold = get_font(19, True)
     f_pill = get_font(15, True)
     f_small = get_font(14)
+    f_group = get_font(16, True)
 
     draw.text((24, 16), title, font=f_title, fill=(255, 255, 255))
-    draw.text((24, 56), "League table", font=f_small, fill=(140, 150, 170))
+    if multi:
+        draw.text((24, 56), "Group tables", font=f_small, fill=(140, 150, 170))
+    else:
+        draw.text((24, 56), "League table", font=f_small, fill=(140, 150, 170))
 
     x_rank = 44
     x_name = 98
@@ -1461,63 +1832,68 @@ def render_table(lid, rows, live_map, logos):
     draw_right(draw, x_gd, col_y + 11, "GD", f_head, head_color)
     draw_right(draw, x_pts, col_y + 11, "Pts", f_head, head_color)
 
-    top = head_h + col_h
-    for i, row in enumerate(rows):
-        y = top + row_h * i
-        score = live_map.get(row["id"])
-        if score is None:
-            score = live_map.get(row["full"].lower())
-        is_live = score is not None
+    y = head_h + col_h
+    for group_name, rows in groups:
+        if multi:
+            draw.rectangle([0, y, width, y + group_h - 1], fill=(44, 52, 78))
+            draw.text((24, y + 6), group_name or "Group", font=f_group, fill=(255, 205, 80))
+            y += group_h
+        for i, row in enumerate(rows):
+            score = live_map.get(row["id"])
+            if score is None:
+                score = live_map.get(row["full"].lower())
+            is_live = score is not None
 
-        if is_live:
-            bg = (88, 22, 30)
-            name_color = (255, 120, 120)
-            num_color = (255, 150, 150)
-            w_color = num_color
-            l_color = num_color
-        elif i % 2 == 0:
-            bg = (24, 29, 42)
-            name_color = (235, 238, 245)
-            num_color = (210, 215, 225)
-            w_color = (120, 205, 130)
-            l_color = (235, 125, 125)
-        else:
-            bg = (20, 25, 36)
-            name_color = (235, 238, 245)
-            num_color = (210, 215, 225)
-            w_color = (120, 205, 130)
-            l_color = (235, 125, 125)
+            if is_live:
+                bg = (88, 22, 30)
+                name_color = (255, 120, 120)
+                num_color = (255, 150, 150)
+                w_color = num_color
+                l_color = num_color
+            elif i % 2 == 0:
+                bg = (24, 29, 42)
+                name_color = (235, 238, 245)
+                num_color = (210, 215, 225)
+                w_color = (120, 205, 130)
+                l_color = (235, 125, 125)
+            else:
+                bg = (20, 25, 36)
+                name_color = (235, 238, 245)
+                num_color = (210, 215, 225)
+                w_color = (120, 205, 130)
+                l_color = (235, 125, 125)
 
-        draw.rectangle([0, y, width, y + row_h - 1], fill=bg)
-        draw_right(draw, x_rank, y + 9, str(i + 1), f_row, num_color)
+            draw.rectangle([0, y, width, y + row_h - 1], fill=bg)
+            draw_right(draw, x_rank, y + 9, str(i + 1), f_row, num_color)
 
-        logo = logos.get(row["logo"])
-        if logo is not None:
-            lx = 58 + (LOGO_SIZE - logo.width) // 2
-            ly = y + (row_h - logo.height) // 2
-            img.paste(logo, (lx, ly), logo)
-        else:
-            draw.ellipse([60, y + 10, 84, y + 30], outline=(90, 100, 120))
+            logo = logos.get(row["logo"])
+            if logo is not None:
+                lx = 58 + (LOGO_SIZE - logo.width) // 2
+                ly = y + (row_h - logo.height) // 2
+                img.paste(logo, (lx, ly), logo)
+            else:
+                draw.ellipse([60, y + 10, 84, y + 30], outline=(90, 100, 120))
 
-        name = fit_text(draw, row["name"], f_row, 215)
-        draw.text((x_name, y + 9), name, font=f_row, fill=name_color)
+            name = fit_text(draw, row["name"], f_row, 215)
+            draw.text((x_name, y + 9), name, font=f_row, fill=name_color)
 
-        if is_live:
-            draw.rounded_rectangle([x_pill, y + 7, x_pill + 96, y + row_h - 7], radius=9, fill=(215, 38, 48))
-            draw.text((x_pill + 9, y + 11), "LIVE " + score, font=f_pill, fill=(255, 255, 255))
+            if is_live:
+                draw.rounded_rectangle([x_pill, y + 7, x_pill + 96, y + row_h - 7], radius=9, fill=(215, 38, 48))
+                draw.text((x_pill + 9, y + 11), "LIVE " + score, font=f_pill, fill=(255, 255, 255))
 
-        draw_right(draw, x_p, y + 9, str(row["p"]), f_row, num_color)
-        draw_right(draw, x_w, y + 9, str(row["w"]), f_row, w_color)
-        draw_right(draw, x_d, y + 9, str(row["d"]), f_row, num_color)
-        draw_right(draw, x_l, y + 9, str(row["l"]), f_row, l_color)
-        if row["gd"] > 0:
-            gd_text = "+" + str(row["gd"])
-        else:
-            gd_text = str(row["gd"])
-        draw_right(draw, x_gd, y + 9, gd_text, f_row, num_color)
-        draw_right(draw, x_pts, y + 9, str(row["pts"]), f_bold, name_color)
+            draw_right(draw, x_p, y + 9, str(row["p"]), f_row, num_color)
+            draw_right(draw, x_w, y + 9, str(row["w"]), f_row, w_color)
+            draw_right(draw, x_d, y + 9, str(row["d"]), f_row, num_color)
+            draw_right(draw, x_l, y + 9, str(row["l"]), f_row, l_color)
+            if row["gd"] > 0:
+                gd_text = "+" + str(row["gd"])
+            else:
+                gd_text = str(row["gd"])
+            draw_right(draw, x_gd, y + 9, gd_text, f_row, num_color)
+            draw_right(draw, x_pts, y + 9, str(row["pts"]), f_bold, name_color)
+            y += row_h
 
-    foot_y = top + row_h * len(rows) + 12
+    foot_y = y + 12
     draw.text((24, foot_y), "Updated " + stamp(), font=f_small, fill=(140, 150, 170))
     draw.text((590, foot_y), "Red row = playing now", font=f_small, fill=(255, 120, 120))
 
@@ -1527,19 +1903,20 @@ def render_table(lid, rows, live_map, logos):
 
 
 def build_table_image(lid):
-    rows = get_table_rows(lid)
-    if not rows:
+    groups = get_table_groups(lid)
+    if not groups:
         return None
     live_map = get_live_map(lid)
     urls = []
-    for r in rows:
-        if r["logo"]:
-            urls.append(r["logo"])
+    for g in groups:
+        for r in g[1]:
+            if r["logo"]:
+                urls.append(r["logo"])
     list(fetch_pool.map(load_logo, urls))
     logos = {}
     for u in urls:
         logos[u] = LOGO_CACHE.get((u, LOGO_SIZE))
-    return render_table(lid, rows, live_map, logos)
+    return render_table(lid, groups, live_map, logos)
 
 
 # ---------------------------------------------------------------
@@ -1646,7 +2023,9 @@ def parse_team_event(ev, lid):
         "hname": short_name(home),
         "aname": short_name(away),
         "hs": score_int(home),
-        "a_s": score_int(away)
+        "a_s": score_int(away),
+        "hp": shoot_int(home),
+        "ap": shoot_int(away)
     }
 
 
@@ -1681,11 +2060,11 @@ def team_event_from_row(r):
     return {
         "id": r["id"], "date": r["date"], "lid": r["lid"], "state": r["state"],
         "hid": r["hid"], "aid": r["aid"], "hname": r["hshort"], "aname": r["ashort"],
-        "hs": r["hs"], "a_s": r["a_s"]
+        "hs": r["hs"], "a_s": r["a_s"], "hp": r.get("hp"), "ap": r.get("ap")
     }
 
 
-def team_events(tid):
+def team_events_fetch(tid):
     team = get_team_index().get(tid)
     if team is None:
         return []
@@ -1724,20 +2103,79 @@ def team_events(tid):
     return merged
 
 
+def team_events(tid):
+    cached = TEAM_CACHE.get(tid)
+    if cached and (time.time() - cached[0]) < 600:
+        return cached[1]
+    events = team_events_fetch(tid)
+    if events:
+        TEAM_CACHE[tid] = (time.time(), events)
+        return events
+    if cached:
+        return cached[1]
+    return events
+
+
+def refresh_team_cache(tid):
+    try:
+        events = team_events_fetch(tid)
+        if events:
+            TEAM_CACHE[tid] = (time.time(), events)
+    except Exception as err:
+        print("team cache error: " + str(err))
+
+
+def warm_loop():
+    time.sleep(3)
+    try:
+        get_team_index()
+    except Exception as err:
+        print("team index error: " + str(err))
+    while True:
+        try:
+            if TEAM_INDEX["teams"] and (time.time() - TEAM_INDEX["time"]) > 19800:
+                get_team_index(True)
+            ids = set()
+            for team_ids in db_all_favs().values():
+                ids |= team_ids
+            for tid in list(ids)[:40]:
+                cached = TEAM_CACHE.get(tid)
+                if cached is None or (time.time() - cached[0]) > 480:
+                    refresh_team_cache(tid)
+                    time.sleep(0.5)
+        except Exception as err:
+            print("warm loop error: " + str(err))
+        time.sleep(60)
+
+
+def pens_text(e):
+    hp = e.get("hp")
+    ap = e.get("ap")
+    if hp is not None and ap is not None and (hp + ap) > 0 and hp != ap:
+        return " (pens " + str(hp) + "-" + str(ap) + ")"
+    return ""
+
+
+def result_text(e, tid):
+    marks = {"W": "🟢", "D": "🟡", "L": "🔴"}
+    league = LEAGUE_TITLES.get(e["lid"], e["lid"])
+    return (marks[team_result(e, tid)] + " " + flagged(e["hname"]) + " " + str(e["hs"]) + "-" + str(e["a_s"]) + " " +
+            flagged(e["aname"]) + esc(pens_text(e)) + " (" + esc(league) + ")")
+
+
 def build_team_list(tid, results):
     team = get_team_index().get(tid)
     if team is None:
         return "I could not find that club. Type its name again."
     events = team_events(tid)
     if results:
-        title = "🗓 <b>" + esc(team["name"]) + " - Results</b>\n\n"
+        title = "🗓 <b>" + flagged(team["name"]) + " - Results</b>\n\n"
         items = sorted([e for e in events if e["state"] == "post"], key=lambda e: e["date"], reverse=True)
     else:
-        title = "📅 <b>" + esc(team["name"]) + " - Fixtures</b>\n\n"
+        title = "📅 <b>" + flagged(team["name"]) + " - Fixtures</b>\n\n"
         items = sorted([e for e in events if e["state"] != "post"], key=lambda e: e["date"])
     if not items:
         return title + "Nothing found right now. Tap Refresh in a few seconds.\n\n🔄 Updated " + stamp()
-    marks = {"W": "🟢", "D": "🟡", "L": "🔴"}
     lines = []
     if results:
         shown = items[:30]
@@ -1746,9 +2184,9 @@ def build_team_list(tid, results):
     for e in shown:
         league = LEAGUE_TITLES.get(e["lid"], e["lid"])
         if results:
-            lines.append(marks[team_result(e, tid)] + " " + esc(e["hname"]) + " " + str(e["hs"]) + "-" + str(e["a_s"]) + " " + esc(e["aname"]) + " (" + esc(league) + ") " + esc(local_date_title(e["date"])))
+            lines.append(result_text(e, tid) + " " + esc(local_date_title(e["date"])))
         else:
-            lines.append(esc(when_text(e["date"])) + "\n" + esc(e["hname"]) + " vs " + esc(e["aname"]) + " (" + esc(league) + ")")
+            lines.append(esc(when_text(e["date"])) + "\n" + flagged(e["hname"]) + " vs " + flagged(e["aname"]) + " (" + esc(league) + ")")
     text = title + "\n".join(lines) + "\n\n🔄 Updated " + stamp()
     return text[:3900]
 
@@ -1778,6 +2216,18 @@ def team_result(e, tid):
         return "W"
     if mine < theirs:
         return "L"
+    hp = e.get("hp")
+    ap = e.get("ap")
+    if hp is not None and ap is not None and hp != ap:
+        if e["hid"] == tid:
+            my_pens = hp
+            their_pens = ap
+        else:
+            my_pens = ap
+            their_pens = hp
+        if my_pens > their_pens:
+            return "W"
+        return "L"
     return "D"
 
 
@@ -1796,18 +2246,18 @@ def build_team_page(tid):
         return "I could not find that club. Type its name again."
     events = team_events(tid)
     if not events:
-        return "📄 <b>" + esc(team["name"]) + "</b>\n\nThe schedule is not available right now. Try Refresh.\n\n🔄 Updated " + stamp()
+        return "📄 <b>" + flagged(team["name"]) + "</b>\n\nThe schedule is not available right now. Try Refresh.\n\n🔄 Updated " + stamp()
     past = sorted([e for e in events if e["state"] == "post"], key=lambda e: e["date"], reverse=True)
     coming = sorted([e for e in events if e["state"] != "post"], key=lambda e: e["date"])
 
-    text = "📄 <b>" + esc(team["name"]) + "</b>\n\n"
+    text = "📄 <b>" + flagged(team["name"]) + "</b>\n\n"
     if coming:
         n = coming[0]
         league = LEAGUE_TITLES.get(n["lid"], n["lid"])
         if n["state"] == "in":
-            text += "🔴 <b>Live now</b>\n" + esc(n["hname"]) + " " + str(n["hs"]) + " - " + str(n["a_s"]) + " " + esc(n["aname"]) + " (" + esc(league) + ")\n\n"
+            text += "🔴 <b>Live now</b>\n" + flagged(n["hname"]) + " " + str(n["hs"]) + " - " + str(n["a_s"]) + " " + flagged(n["aname"]) + " (" + esc(league) + ")\n\n"
         else:
-            text += "⏭ <b>Next match</b>\n" + esc(when_text(n["date"])) + "\n" + esc(n["hname"]) + " vs " + esc(n["aname"]) + " (" + esc(league) + ")\n\n"
+            text += "⏭ <b>Next match</b>\n" + esc(when_text(n["date"])) + "\n" + flagged(n["hname"]) + " vs " + flagged(n["aname"]) + " (" + esc(league) + ")\n\n"
     else:
         text += "⏭ <b>Next match</b>\nNo upcoming match found.\n\n"
 
@@ -1820,8 +2270,7 @@ def build_team_page(tid):
         text += "📈 <b>Form</b> (oldest to latest)\n" + " ".join(letters) + "\n\n"
         text += "🗓 <b>Recent results</b>\n"
         for e in recent:
-            league = LEAGUE_TITLES.get(e["lid"], e["lid"])
-            text += marks[team_result(e, tid)] + " " + esc(e["hname"]) + " " + str(e["hs"]) + "-" + str(e["a_s"]) + " " + esc(e["aname"]) + " (" + esc(league) + ")\n"
+            text += result_text(e, tid) + "\n"
     else:
         text += "🗓 <b>Recent results</b>\nNo finished matches found.\n"
     text += "\n🔄 Updated " + stamp()
@@ -2263,7 +2712,7 @@ def admin_broadcast(admin_chat, body):
     send_text(admin_chat, "✅ Delivered to " + str(ok) + " of " + str(len(subs)) + " chats.")
 
 
-def send_reminder(info, play):
+def send_reminder_now(info, play):
     groups = {}
     for chat_id in recipients(info):
         tz = user_tz(chat_id)
@@ -2286,6 +2735,11 @@ def send_reminder(info, play):
     ALERT_COUNT["sent"] += 1
     ALERT_COUNT["last"] = time.time()
     print("REMINDER PUSHED to " + str(len(jobs)) + " chats for " + info["hname"] + " vs " + info["aname"])
+
+
+def send_reminder(info, play):
+    ensure_sender()
+    ALERT_QUEUE.put(lambda: send_reminder_now(info, play))
 
 
 def local_date_title(iso):
@@ -2559,8 +3013,8 @@ def build_match_center(lid, eid):
         info = event_info(ev, lid)
         if info is None:
             return None, "Match details are not available yet."
-        icon_h = team_tag(info["hname"], info["hid"])
-        icon_a = team_tag(info["aname"], info["aid"])
+        icon_h = team_tag(info["hname"], info["hid"], info.get("habbr", ""), info.get("lid", ""))
+        icon_a = team_tag(info["aname"], info["aid"], info.get("aabbr", ""), info.get("lid", ""))
         if info["state"] == "pre":
             text = icon_h + esc(info["hname"]) + " vs " + icon_a + esc(info["aname"]) + "\nKickoff " + esc(kickoff_hm(info["date"])) + " WAT"
         else:
@@ -2753,11 +3207,11 @@ def fetch_nat_teams(lid):
     return parse_teams_list(data)
 
 
-def get_team_index():
+def get_team_index(force=False):
     now = time.time()
-    if TEAM_INDEX["teams"] and (now - TEAM_INDEX["time"]) < 21600:
+    if not force and TEAM_INDEX["teams"] and (now - TEAM_INDEX["time"]) < 21600:
         return TEAM_INDEX["teams"]
-    lids = [lid for lid in LEAGUE_IDS if lid not in CUP_IDS]
+    lids = [lid for lid in LEAGUE_IDS if lid not in CUP_IDS and lid not in NATIONAL_COMP_IDS]
     results = list(fetch_pool.map(get_standings, lids))
     teams = {}
     for lid, entries in zip(lids, results):
@@ -2842,6 +3296,7 @@ def add_favorite(chat_id, team):
     if team["id"] not in ids and limit is not None and len(favs) >= limit:
         return False
     db_add_fav(chat_id, team["id"], team["name"])
+    EXTRA_POOL.submit(refresh_team_cache, team["id"])
     return True
 
 
@@ -2852,9 +3307,9 @@ def send_my_team(chat_id, prefix=""):
     if favs:
         text += "You only get alerts for matches of:\n"
         for tid, name in favs:
-            text += "• " + esc(name) + "\n"
+            text += "• " + flagged(name) + "\n"
             rows.append([
-                {"text": "📄 " + name, "callback_data": "tp:" + tid},
+                {"text": "📄 " + flag_prefix(name) + name, "callback_data": "tp:" + tid},
                 {"text": "❌", "callback_data": "uf:" + tid}
             ])
         text += "\nTap a team for its next match and form. Type another club or country name to add it (" + fav_limit_text(chat_id) + ")."
@@ -2888,7 +3343,10 @@ def handle_team_search(chat_id, query):
     rows = []
     for t in teams[:6]:
         label = t["name"]
-        if t.get("country"):
+        flag = flag_for(t["name"], t.get("abbr", ""))
+        if flag and t.get("country"):
+            label = flag + " " + label
+        elif t.get("country"):
             label = "🌍 " + label
         rows.append([{"text": label, "callback_data": "fav:" + t["id"]}])
     rows.append([{"text": "⬅️ Main Menu", "callback_data": "menu"}])
@@ -3134,7 +3592,7 @@ def handle_callback(cb):
     elif data.startswith("ts:") or data.startswith("rts:"):
         refresh = data.startswith("rts:")
         lid = data.split(":", 1)[1]
-        if lid not in LEAGUE_IDS or lid in CUP_IDS:
+        if lid not in LEAGUE_IDS or lid in CUP_IDS or lid in NATIONAL_COMP_IDS:
             answer_cb(cb_id)
             return
         if refresh:
@@ -3383,26 +3841,76 @@ def broadcast(text, kb=None, info=None):
     return sent
 
 
+def ensure_sender():
+    with SENDER_LOCK:
+        t = SENDER.get("thread")
+        if t is not None and t.is_alive():
+            return
+        t = threading.Thread(target=sender_loop, daemon=True)
+        SENDER["thread"] = t
+        t.start()
+
+
+def sender_loop():
+    while True:
+        job = ALERT_QUEUE.get()
+        try:
+            job()
+        except Exception as err:
+            print("sender job error: " + str(err))
+        finally:
+            ALERT_QUEUE.task_done()
+
+
+def wait_alerts():
+    ALERT_QUEUE.join()
+
+
+def broadcast_async(text, kb, info):
+    holder = {"msgs": {}, "done": threading.Event()}
+
+    def job():
+        try:
+            holder["msgs"] = broadcast(text, kb, info)
+        finally:
+            holder["done"].set()
+
+    ensure_sender()
+    ALERT_QUEUE.put(job)
+    return holder
+
+
 def edit_alert(entry, info, play):
     text = build_goal_text(play, info, entry["hs"], entry["a_s"])
     kb = alert_kb(info)
-    jobs = []
-    for chat_id, message_id in entry["msgs"].items():
-        jobs.append(SEND_POOL.submit(edit_safe, chat_id, message_id, text, kb))
-    for fut in jobs:
-        try:
-            fut.result(timeout=180)
-        except Exception as err:
-            print("edit job error: " + str(err))
+    holder = entry["msgs"]
+
+    def job():
+        if isinstance(holder, dict) and "done" in holder:
+            holder["done"].wait(180)
+            msgs = holder["msgs"]
+        else:
+            msgs = holder
+        jobs = []
+        for chat_id, message_id in msgs.items():
+            jobs.append(SEND_POOL.submit(edit_safe, chat_id, message_id, text, kb))
+        for fut in jobs:
+            try:
+                fut.result(timeout=180)
+            except Exception as err:
+                print("edit job error: " + str(err))
+
+    ensure_sender()
+    ALERT_QUEUE.put(job)
 
 
 def send_alert(info, play, hs, a_s):
     text = build_goal_text(play, info, hs, a_s)
-    sent = broadcast(text, alert_kb(info), info)
+    holder = broadcast_async(text, alert_kb(info), info)
     ALERT_COUNT["sent"] += 1
     ALERT_COUNT["last"] = time.time()
-    print("ALERT PUSHED to " + str(len(sent)) + " chats: " + text)
-    return sent
+    print("ALERT QUEUED: " + text)
+    return holder
 
 
 def period_value(status):
@@ -3594,6 +4102,8 @@ def event_info(ev, lid):
         "ashort": ateam.get("shortDisplayName") or ateam.get("displayName") or "Away",
         "hlogo": logo_of(hteam),
         "alogo": logo_of(ateam),
+        "habbr": hteam.get("abbreviation") or "",
+        "aabbr": ateam.get("abbreviation") or "",
         "details": comps[0].get("details") or [],
         "minute": str(minute),
         "hname": hteam.get("displayName") or hteam.get("shortDisplayName") or "Home",
@@ -3793,10 +4303,12 @@ def summary_plays(info, cycle_plays):
     return plays
 
 
-def team_tag(name, tid=""):
+def team_tag(name, tid="", abbr="", lid=""):
     custom = CLUB_EMOJI.get(str(tid).lower()) or CLUB_EMOJI.get(str(name).lower())
     if custom:
         return "<tg-emoji emoji-id=\"" + custom + "\">⚽</tg-emoji> "
+    if lid in NATIONAL_TEAM_LIDS:
+        return flag_prefix(name, abbr)
     low = str(name).lower()
     emoji = TEAM_EMOJI.get(low)
     if emoji:
@@ -3810,7 +4322,9 @@ def team_tag(name, tid=""):
 def match_head(info):
     hname = info["hname"]
     aname = info["aname"]
-    return team_tag(hname, info.get("hid", "")) + esc(hname) + " - " + team_tag(aname, info.get("aid", "")) + esc(aname) + ":"
+    lid = info.get("lid", "")
+    return (team_tag(hname, info.get("hid", ""), info.get("habbr", ""), lid) + esc(hname) + " - " +
+            team_tag(aname, info.get("aid", ""), info.get("aabbr", ""), lid) + esc(aname) + ":")
 
 
 def build_goal_text(play, info, hs, a_s):
@@ -4126,6 +4640,31 @@ def process_score(info, row):
         handle_var_cancel(info, "a")
 
 
+def summary_task(info, baseline):
+    eid = info["id"]
+    try:
+        plays = summary_plays(info, {})
+        if plays:
+            if baseline:
+                for p in plays:
+                    db_mark_seen(eid, p["key"])
+            else:
+                alert_missed_penalties(info, plays)
+                alert_red_cards(info, plays)
+    except Exception as err:
+        print("summary task error: " + str(err))
+    finally:
+        SUMMARY_BUSY.discard(eid)
+
+
+def submit_summary(info, baseline):
+    eid = info["id"]
+    if eid in SUMMARY_BUSY:
+        return
+    SUMMARY_BUSY.add(eid)
+    EXTRA_POOL.submit(summary_task, info, baseline)
+
+
 def handle_event(info, cycle_plays):
     eid = info["id"]
     state = info["state"]
@@ -4140,7 +4679,7 @@ def handle_event(info, cycle_plays):
             play = {"kind": "reminder", "mins": int(round(mins))}
             send_reminder(info, play)
         if mins is not None and -5 <= mins <= LINEUP_WINDOW and not db_is_seen(eid, "mark:LU"):
-            check_lineup_alert(info)
+            EXTRA_POOL.submit(check_lineup_alert, info)
         return
 
     if state == "post":
@@ -4152,7 +4691,7 @@ def handle_event(info, cycle_plays):
         name = info["status_name"]
         if ("FULL_TIME" in name or "FINAL" in name) and not db_is_seen(eid, "mark:FT"):
             tied = info["hs"] == info["a_s"]
-            hold = tied and info["lid"] in CUP_IDS and "FINAL" not in name and info.get("hp") is None
+            hold = tied and (info["lid"] in CUP_IDS or info["lid"] in NATIONAL_COMP_IDS) and "FINAL" not in name and info.get("hp") is None
             if hold:
                 first = FT_WAIT.get(eid)
                 if first is None:
@@ -4193,10 +4732,8 @@ def handle_event(info, cycle_plays):
                 init_shootout_state(info)
         for p in detail_plays(info):
             db_mark_seen(eid, p["key"])
-        plays = summary_plays(info, cycle_plays)
-        if plays:
-            for p in plays:
-                db_mark_seen(eid, p["key"])
+        LAST_PEN[eid] = time.time()
+        submit_summary(info, True)
         return
 
     if not db_is_seen(eid, "mark:KO"):
@@ -4224,10 +4761,7 @@ def handle_event(info, cycle_plays):
     now = time.time()
     if now - LAST_PEN.get(eid, 0) >= PEN_CHECK_SECONDS:
         LAST_PEN[eid] = now
-        plays = summary_plays(info, cycle_plays)
-        if plays:
-            alert_missed_penalties(info, plays)
-            alert_red_cards(info, plays)
+        submit_summary(info, False)
 
 
 def poll_league(lid, dates):
@@ -4236,7 +4770,7 @@ def poll_league(lid, dates):
     today = today_str()
     for ds in dates:
         is_today = (ds == today)
-        data = fetch_scoreboard(lid, ds, is_today, is_today and LEAGUE_FAST.get(lid, False))
+        data = fetch_scoreboard(lid, ds, is_today, is_today and LEAGUE_FAST.get(lid, False), 8)
         if data is None:
             failed = True
             continue
@@ -4296,31 +4830,40 @@ def check_health():
         notify_admins("✅ ESPN is working again.")
 
 
-def check_cycle(cycle):
+def check_cycle(cycle, fast=False):
     now = time.time()
     dates = scoreboard_dates()
     due = []
     for lid in LEAGUE_IDS:
+        if LEAGUE_FAST.get(lid, False) != fast:
+            continue
         if now >= LEAGUE_NEXT.get(lid, 0):
             due.append(lid)
-    results = list(fetch_pool.map(lambda lid: poll_league(lid, dates), due))
+    if not due:
+        return
+    futures = {}
+    for lid in due:
+        futures[fetch_pool.submit(poll_league, lid, dates)] = lid
     cycle_plays = {}
     seen_ids = set()
     fails = 0
-    for lid, events in zip(due, results):
+    for fut in as_completed(futures):
+        lid = futures[fut]
+        try:
+            events = fut.result()
+        except Exception as err:
+            print("poll error: " + str(err))
+            events = None
         if events is None:
             fails += 1
             FAILS[lid] = FAILS.get(lid, 0) + 1
             wait = 30 * FAILS[lid]
             if wait > 300:
                 wait = 300
-            LEAGUE_NEXT[lid] = now + wait
+            LEAGUE_NEXT[lid] = time.time() + wait
             continue
         FAILS[lid] = 0
         LEAGUE_OK.add(lid)
-        wait_for = next_interval(events)
-        LEAGUE_NEXT[lid] = now + wait_for
-        LEAGUE_FAST[lid] = wait_for <= SLOW_LIVE_POLL
         live = 0
         for info in events:
             if info["state"] == "in":
@@ -4334,22 +4877,31 @@ def check_cycle(cycle):
                 handle_event(info, cycle_plays)
             except Exception as err:
                 print("Event error: " + str(err))
+        wait_for = next_interval(events)
+        LEAGUE_NEXT[lid] = time.time() + wait_for
+        LEAGUE_FAST[lid] = wait_for <= SLOW_LIVE_POLL
     NOTIFIER["polled"] = len(due)
     NOTIFIER["fetch_fail"] = fails
     if fails and ("403" in LAST_ERRORS["espn"] or "429" in LAST_ERRORS["espn"]):
         POLL_STATE["slow_until"] = time.time() + 120
     NOTIFIER["last_run"] = time.time()
-    check_health()
+    if not fast:
+        check_health()
 
 
-def notifier_loop():
-    print("Notifier started - fast adaptive polling")
+def notifier_loop(fast=False):
+    if fast:
+        print("Fast notifier started (live matches)")
+        tick = NOTIFY_TICK
+    else:
+        print("Slow notifier started (everything else)")
+        tick = 2.0
     cycle = 0
     while True:
         cycle += 1
         started = time.time()
         try:
-            check_cycle(cycle)
+            check_cycle(cycle, fast)
             NOTIFIER["error"] = ""
             ADMIN_STATE["err_count"] = 0
         except Exception as err:
@@ -4359,9 +4911,9 @@ def notifier_loop():
             if ADMIN_STATE["err_count"] >= 3 and (time.time() - ADMIN_STATE["last_err_alert"]) > 900:
                 ADMIN_STATE["last_err_alert"] = time.time()
                 notify_admins("⚠️ <b>Notifier error</b> (3 in a row):\n" + esc(str(err)))
-        wait = NOTIFY_TICK - (time.time() - started)
-        if wait < 0.3:
-            wait = 0.3
+        wait = tick - (time.time() - started)
+        if wait < 0.2:
+            wait = 0.2
         time.sleep(wait)
 
 
@@ -4381,10 +4933,15 @@ def main():
 
     init_db()
     notify_admins("🔄 <b>Bot restarted</b> at " + stamp() + ".")
-    notifier = threading.Thread(target=notifier_loop, daemon=True)
-    notifier.start()
+    ensure_sender()
+    fast_notifier = threading.Thread(target=notifier_loop, args=(True,), daemon=True)
+    fast_notifier.start()
+    slow_notifier = threading.Thread(target=notifier_loop, args=(False,), daemon=True)
+    slow_notifier.start()
     digest = threading.Thread(target=digest_loop, daemon=True)
     digest.start()
+    warm = threading.Thread(target=warm_loop, daemon=True)
+    warm.start()
     poll_loop()
 
 
